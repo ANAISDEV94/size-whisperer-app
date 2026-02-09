@@ -30,6 +30,8 @@ const ExtensionPanel = () => {
   const [panelState, setPanelState] = useState<PanelState>("auth");
   const [, setProfile] = useState<UserProfile | null>(null);
   const [recommendation] = useState<SizeRecommendation>(MOCK_RECOMMENDATION);
+  const [confirmedSize, setConfirmedSize] = useState<string | null>(null);
+  const [confirmedBrand, setConfirmedBrand] = useState<string | null>(null);
 
   const handleOpen = useCallback(() => setIsOpen(true), []);
   const handleClose = useCallback(() => setIsOpen(false), []);
@@ -47,17 +49,22 @@ const ExtensionPanel = () => {
   }, []);
 
   const handleKeep = useCallback(() => {
+    setConfirmedSize(recommendation.size);
+    setConfirmedBrand(recommendation.brandName);
     setPanelState("confirmed");
-  }, []);
+  }, [recommendation]);
 
   const handleSizeDown = useCallback(() => {
-    // In real implementation, adjust and confirm
+    setConfirmedSize(recommendation.size);
+    setConfirmedBrand(recommendation.brandName);
     setPanelState("confirmed");
-  }, []);
+  }, [recommendation]);
 
   const handleSizeUp = useCallback(() => {
+    setConfirmedSize(recommendation.size);
+    setConfirmedBrand(recommendation.brandName);
     setPanelState("confirmed");
-  }, []);
+  }, [recommendation]);
 
   const handleAddToCart = useCallback(() => {
     // Will scroll to size selector on host page via postMessage
@@ -102,7 +109,13 @@ const ExtensionPanel = () => {
   return (
     <>
       <AnimatePresence>
-        {!isOpen && <FloatingWidget onClick={handleOpen} />}
+        {!isOpen && (
+          <FloatingWidget
+            onClick={handleOpen}
+            confirmedSize={confirmedSize}
+            confirmedBrand={confirmedBrand}
+          />
+        )}
       </AnimatePresence>
 
       <AnimatePresence>

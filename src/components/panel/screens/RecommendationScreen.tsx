@@ -29,7 +29,7 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp }: 
 
       <button
         onClick={() => setWhyExpanded(!whyExpanded)}
-        className="flex items-center justify-between w-full py-3 border-t border-border text-left"
+        className="flex items-center justify-between w-full py-3 border-t border-b border-border text-left"
       >
         <span className="text-xs uppercase tracking-wider text-muted-foreground">Why this size</span>
         {whyExpanded ? (
@@ -39,7 +39,7 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp }: 
         )}
       </button>
       {whyExpanded && (
-        <ul className="space-y-2 pb-4 pl-1">
+        <ul className="space-y-2 py-4 pl-1">
           {recommendation.bullets.map((bullet, i) => (
             <li key={i} className="flex items-start gap-2 text-xs text-secondary-foreground">
               <span className="text-primary mt-0.5">•</span>
