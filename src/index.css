@@ -40,6 +40,7 @@
     --panel-surface: 0 0% 14%;
     --panel-elevated: 0 0% 18%;
     --cyan-glow: 180 70% 50%;
+    --widget-glow: 0 0 12px 3px hsl(180 70% 50% / 0.35);
 
     --sidebar-background: 0 0% 10%;
     --sidebar-foreground: 0 0% 85%;
