@@ -1,148 +1,102 @@
 
+# Global Design System Update: Optima Font, Button System, and Consistency
 
-# ALTAANA Essential V1 — Chrome Extension MVP
-
-## Architecture Overview
-
-This Lovable project serves as **both** the extension's panel UI (React app) **and** the entire backend (Lovable Cloud: database, auth, edge functions, secrets). A thin Chrome extension shell (~5 files managed via GitHub export) will inject your Lovable-hosted panel as an iframe on supported product pages.
-
-**Design language:** Dark panel (#1a1a1a/near-black), cyan/teal accents, luxury serif logo, minimal typography. Matches your mockups exactly.
+This plan applies the new design constraints across all screens in the extension panel. The changes are systematic -- updating the font family, removing all bold text, standardizing buttons, and ensuring the background color matches.
 
 ---
 
-## Milestone 1 — Extension Panel UI Shell + Floating Widget
+## 1. Font System: Switch from Playfair Display + Inter to Optima
 
-Build all panel screens as a single-page React app with internal state routing:
+**File: `src/index.css`**
+- Remove the Google Fonts import for Playfair Display and Inter
+- Set the base body font to `Optima, 'Lucida Grande', sans-serif`
+- Update `.font-serif-display` class to also use Optima (removing Playfair Display) since all text uses the same font family now -- hierarchy is created via size, spacing, and color only
 
-- **Floating widget:** A compact "FIND MY SIZE" pill with the ALTAANA logo, fixed to the right side of the viewport. Clicking it opens the panel.
-- **Panel container:** A right-anchored slide-in panel (~340px wide, full height) with dark background, close (X) button, and ALTAANA Essential logo header.
-- **State machine:** The panel cycles through states: `idle → auth → profile → analyzing → recommendation → confirmed`. Each state renders the matching screen from your mockups.
-- **Close behavior:** X closes panel back to floating widget. State is preserved.
-
----
-
-## Milestone 2 — Authentication + Session Persistence
-
-- **Lovable Cloud auth** with Google sign-in and email/password options.
-- **"Continue without saving"** option that creates an anonymous/guest session (profile won't persist across devices).
-- **Session persistence:** Auth token stored in `chrome.storage.local` by the extension shell. On panel open, token is passed to the iframe, so returning users skip sign-in entirely.
-- **Sign-in screen UI** matches your mockup: logo, headline "Save your size for future shopping", Google button (cyan), email button (outlined), "Continue without saving" link, privacy reassurance text.
+**Why Optima**: The design spec mandates Optima as the sole font with Regular weight only. No bold anywhere.
 
 ---
 
-## Milestone 3 — Sizing Profile Creation + Save
+## 2. AuthScreen -- Background and Button Sizing Fix
 
-- **Brand selector:** Searchable dropdown of all 38 supported brands. User picks up to 2 anchor brands.
-- **Size selector per brand:** Dropdown showing both numeric (00–20) and letter (XXXS–4X) sizes.
-- **"+ Add another brand (recommended)"** button to add second anchor.
-- **Fit preference:** Three toggle buttons — Fitted / True to size (default selected, cyan) / Relaxed.
-- **Save to database:** Profile saved to Lovable Cloud backend. Profile is editable later.
-- **UI matches your mockup** with "Takes about 60 seconds" cyan subtitle.
-
----
-
-## Milestone 4 — Brand Data + Airtable Integration
-
-- **Airtable sync via edge function:** A scheduled edge function fetches your Airtable base (using your Airtable API key stored as a Lovable secret) and caches all 38 brands' sizing data into the Lovable Cloud database. Runs nightly with manual trigger option.
-- **Brand catalog table:** Normalized brand names mapped to keys, sizing charts (size → measurements/notes), fit tendency ("runs small", "runs large", "true to size"), and garment category notes.
-- **PDP detection:** The Chrome extension content script reads the current page URL/domain to identify the brand. A mapping table connects domains (e.g., `aloyoga.com`, `revolve.com`) to brand keys. The detected brand + product category is sent to the backend.
+**File: `src/components/panel/screens/AuthScreen.tsx`**
+- Change modal background from `linear-gradient(#151213 -> #070506)` to a gradient based on `#0D0D0D` (e.g., `linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)`)
+- Change button heights from `56px` to `48.5px`
+- Set button widths to `334px` (centered within the 404px modal with ~35px padding each side)
+- Remove all `fontWeight: 500` -- set to `400` (Regular) everywhere
+- Update heading `fontWeight` to `400` (already set, but confirm no `font-medium` or `font-semibold` classes leak in)
 
 ---
 
-## Milestone 5 — Size Recommendation Engine + Display
+## 3. Panel Slide-in Screens -- Standardize Container and Typography
 
-- **Rule-based recommendation logic (edge function):**
-  1. Look up user's anchor brand sizes from their profile
-  2. Look up the target brand's sizing chart from cached Airtable data
-  3. Cross-reference sizes using measurement overlap or size-index mapping
-  4. Apply fit tendency adjustments (e.g., "runs small" → size up)
-  5. Apply user's fit preference modifier
-  6. Return: recommended size, 3 explanation bullets, and cross-brand comparison data
+All screens rendered inside the `ExtensionPanel` slide-in drawer currently use a 340px-wide panel. These must be updated to match the 404x733 fixed container and the new design rules.
 
-- **"Analyzing fit…" screen:** Spinner with loading text while the API call runs. Matches your mockup.
+**File: `src/components/panel/ExtensionPanel.tsx`**
+- Update the slide-in panel width from `w-[340px]` to `w-[404px]`
+- Set fixed height to 733px with the same styling approach as the auth modal (right-aligned, 16px margin, rounded corners, `#0D0D0D` gradient background, teal border, shadow)
+- Change from `fixed right-0 top-0 h-full` full-height panel to a vertically centered fixed-size modal matching the auth screen's container approach
 
-- **Recommendation screen:**
-  - "YOUR RECOMMENDED SIZE" label + size in bold (e.g., "Large")
-  - "WHY THIS SIZE" section with 3 contextual bullets (e.g., "You wear Medium in Alo Yoga", "This CSB top runs smaller in the bust", "Similar shoppers size up in CSB tops")
-  - Three action buttons: Size down / **Keep** (cyan, primary) / Size up
-  - "Boost accuracy (optional)" expandable section
-  - Disclaimer at bottom
+**File: `src/components/panel/PanelHeader.tsx`**
+- Remove `font-medium`, `font-semibold`, or any bold classes
+- Ensure font is inherited (Optima Regular)
 
 ---
 
-## Milestone 6 — Size Confirmed + Post-Confirmation
+## 4. ProfileScreen -- Button and Typography Updates
 
-- **Size confirmed screen:**
-  - Checkmark + "Size confirmed" + "We'll remember this fit for similar items."
-  - Teal card showing "YOUR SIZE FOR THIS ITEM" + size
-  - **"Add to cart with my size"** CTA (cyan) — scrolls the product page to the size selector/dropdown
-  - Collapsible "Why this recommendation" (3 bullets)
-  - Collapsible "Compare across brands" showing anchor brands + target brand with size and fit tag badges (e.g., "true to size", "runs small", "snug fit")
-  - Disclaimer footer
-
-- **Feedback logging:** User's choice (size down/keep/size up) is saved to the database for future learning.
-- **Memory:** After confirmation, closing returns to widget. Re-opening on the same product shows the confirmed state directly.
+**File: `src/components/panel/screens/ProfileScreen.tsx`**
+- Remove `font-medium` from heading and all text
+- Update "Save my profile" button: height `48.5px`, width `334px`, pill shape, Optima Regular
+- Update fit preference pill buttons: remove `font-medium`
+- Ensure all label text uses Optima Regular (no bold)
 
 ---
 
-## Milestone 7 — Chrome Extension Shell + Integration Testing
+## 5. AnalyzingScreen -- Typography Update
 
-- **Export project to GitHub** from Lovable settings.
-- **Add extension shell files** (managed in GitHub):
-  - `manifest.json` (Manifest V3, permissions for activeTab + storage)
-  - `content.js` — detects supported brand domains, injects floating widget + iframe pointing to your published Lovable app URL
-  - `background.js` — handles auth token relay between extension storage and iframe
-  - Extension icons (from your logo asset)
-- **Test end-to-end** on 2 pilot brands: **Alo Yoga** (`aloyoga.com`) and **CSB** (likely on `revolve.com`), then expand domain mappings to all 38 brands.
+**File: `src/components/panel/screens/AnalyzingScreen.tsx`**
+- Remove `font-medium` from the "Analyzing fit..." heading
+- Ensure Optima Regular is inherited
 
 ---
 
-## Database Schema (Lovable Cloud)
+## 6. RecommendationScreen -- Button and Typography Updates
 
-- **users** — handled by Lovable Cloud auth
-- **profiles** — user_id, anchor_brands (up to 2 with sizes), fit_preference, created/updated timestamps
-- **brand_catalog** — brand_key, display_name, domains[], fit_tendency, garment_categories
-- **sizing_charts** — brand_key, category, size_label, measurements (JSON), notes, synced_at
-- **recommendations** — user_id, brand_key, product_url, recommended_size, explanation_bullets, created_at
-- **user_adjustments** — recommendation_id, action (size_down/keep/size_up), final_size, created_at
-
----
-
-## API Endpoints (Edge Functions)
-
-- `auth/session` — validate/refresh session token
-- `profile` — create, read, update sizing profile
-- `brands` — list supported brands for dropdown
-- `recommend` — accept brand_key + product context, return size recommendation
-- `feedback` — log user's size adjustment choice
-- `sync-airtable` — fetch + cache Airtable data (triggered manually or by schedule)
+**File: `src/components/panel/screens/RecommendationScreen.tsx`**
+- Remove `font-semibold` from the size heading
+- Remove `font-medium` from the Keep button
+- Standardize all three buttons (Size down / Keep / Size up) to `48.5px` height
+- Ensure no bold text anywhere
 
 ---
 
-## Airtable Integration
+## 7. ConfirmedScreen -- Button and Typography Updates
 
-- Store your Airtable API key as a **Lovable secret**
-- Edge function fetches all records from your sizing table, normalizes brand names to keys, and upserts into the `sizing_charts` and `brand_catalog` tables
-- **Nightly sync** is ideal; manual trigger available for immediate updates after you edit Airtable
-- Brand name normalization: a mapping table handles variations (e.g., "7 For All Mankind" → `seven_for_all_mankind`)
-
----
-
-## Landing Page (Outline Only — Separate Project Later)
-
-- Separate Lovable project under same account
-- Pages: Hero + value prop, How it works (3 steps), Supported brands grid, Privacy/disclaimer, Chrome Web Store install link
-- Links to extension install page; shared auth system so sign-up on landing page carries over
+**File: `src/components/panel/screens/ConfirmedScreen.tsx`**
+- Remove `font-medium` and `font-semibold` from all text
+- Update "Add to cart with my size" button: height `48.5px`, width `334px`, pill, Optima Regular
+- Remove `font-medium` from brand comparison items
 
 ---
 
-## Build Order Summary
+## 8. FloatingWidget -- Font Update
 
-1. Panel UI shell with all screen states + dark luxury design
-2. Lovable Cloud setup: auth (Google + email) + session handling
-3. Profile creation flow + database save
-4. Airtable sync edge function + brand catalog + sizing charts in DB
-5. Recommendation engine edge function + display
-6. Confirmation flow + feedback logging + "Add to cart" scroll behavior
-7. GitHub export + Chrome extension shell + end-to-end testing on Alo Yoga & CSB
+**File: `src/components/panel/FloatingWidget.tsx`**
+- Remove `fontWeight: 500` -- set to `400`
+- Font will inherit Optima from the global CSS
 
+---
+
+## Summary of Changes
+
+| File | Changes |
+|------|---------|
+| `src/index.css` | Replace fonts with Optima, remove Google Fonts import |
+| `src/components/panel/screens/AuthScreen.tsx` | Background to #0D0D0D gradient, buttons 48.5px x 334px, font-weight 400 |
+| `src/components/panel/ExtensionPanel.tsx` | Panel container: 404x733, right-aligned with margin, rounded corners, matching background |
+| `src/components/panel/PanelHeader.tsx` | Remove bold classes |
+| `src/components/panel/screens/ProfileScreen.tsx` | Remove bold, standardize button size |
+| `src/components/panel/screens/AnalyzingScreen.tsx` | Remove bold |
+| `src/components/panel/screens/RecommendationScreen.tsx` | Remove bold, standardize button heights |
+| `src/components/panel/screens/ConfirmedScreen.tsx` | Remove bold, standardize button size |
+| `src/components/panel/FloatingWidget.tsx` | Font-weight 400 |
