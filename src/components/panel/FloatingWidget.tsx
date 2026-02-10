@@ -17,24 +17,55 @@ const FloatingWidget = ({ onClick, confirmedSize, confirmedBrand }: FloatingWidg
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 20 }}
       onClick={onClick}
-      className="fixed right-0 top-1/2 -translate-y-1/2 z-50 flex items-center gap-2 bg-primary text-primary-foreground px-4 py-3 rounded-l-full shadow-lg hover:shadow-xl transition-shadow animate-pulse-glow cursor-pointer"
+      className="fixed right-0 top-1/2 -translate-y-1/2 z-50 flex items-center cursor-pointer"
+      style={{
+        width: isConfirmed ? "auto" : 180,
+        height: 41,
+        borderRadius: "61.5px 0 0 61.5px",
+        background: "#070506",
+        boxShadow: "0 6px 20px rgba(0, 0, 0, 0.2)",
+        padding: 0,
+        border: "none",
+      }}
       aria-label={isConfirmed ? `Size confirmed: ${confirmedSize}` : "Find my size"}
     >
-      {isConfirmed ? (
-        <>
-          <Check className="w-4 h-4" strokeWidth={2.5} />
-          <span className="text-xs font-semibold tracking-wider uppercase whitespace-nowrap">
-            {confirmedSize} — {confirmedBrand}
-          </span>
-        </>
-      ) : (
-        <>
-          <img src={altaanaLogo} alt="" className="h-4 w-auto brightness-0" />
-          <span className="text-xs font-semibold tracking-wider uppercase whitespace-nowrap">
-            Find My Size
-          </span>
-        </>
-      )}
+      {/* Left circular logo container */}
+      <div
+        className="flex items-center justify-center flex-shrink-0"
+        style={{
+          width: 41,
+          height: 41,
+          borderRadius: "50%",
+          background: "#070506",
+        }}
+      >
+        {isConfirmed ? (
+          <Check className="w-4 h-4" style={{ color: "#00CED1" }} strokeWidth={2.5} />
+        ) : (
+          <img
+            src={altaanaLogo}
+            alt=""
+            className="w-5 h-5 object-contain"
+            style={{ filter: "brightness(0) invert(1)" }}
+          />
+        )}
+      </div>
+
+      {/* Right CTA pill text */}
+      <span
+        className="whitespace-nowrap"
+        style={{
+          color: "#00CED1",
+          fontSize: 11,
+          fontWeight: 500,
+          letterSpacing: "0.08em",
+          textTransform: "uppercase" as const,
+          paddingRight: isConfirmed ? 24 : 28,
+          paddingLeft: 4,
+        }}
+      >
+        {isConfirmed ? `${confirmedSize} — ${confirmedBrand}` : "Find My Size"}
+      </span>
     </motion.button>
   );
 };
