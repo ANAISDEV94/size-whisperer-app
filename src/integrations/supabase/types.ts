@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       brand_catalog: {
         Row: {
+          available_sizes: string[]
           brand_key: string
           created_at: string
           display_name: string
@@ -27,6 +28,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          available_sizes?: string[]
           brand_key: string
           created_at?: string
           display_name: string
@@ -38,6 +40,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          available_sizes?: string[]
           brand_key?: string
           created_at?: string
           display_name?: string
