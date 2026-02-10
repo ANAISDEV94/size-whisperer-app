@@ -10,18 +10,17 @@ interface AuthScreenProps {
 
 const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose }: AuthScreenProps) => {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-stretch justify-end">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
 
-      {/* Modal */}
+      {/* Right-side panel */}
       <div
-        className="relative z-10 flex flex-col w-[340px]"
+        className="relative z-10 flex flex-col w-[340px] h-full"
         style={{
           background: "linear-gradient(180deg, #0a0809 0%, #070506 100%)",
-          border: "1px solid rgba(0, 206, 209, 0.25)",
-          borderRadius: 16,
-          boxShadow: "0 12px 40px rgba(0, 0, 0, 0.5)",
+          borderLeft: "1px solid rgba(0, 206, 209, 0.25)",
+          boxShadow: "-12px 0 40px rgba(0, 0, 0, 0.5)",
           padding: "0",
         }}
       >
@@ -30,7 +29,7 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose 
           <img
             src={altaanaLogo}
             alt="ALTAANA Essential"
-            className="h-5 w-auto"
+            className="h-10 w-auto"
             style={{ filter: "brightness(0) invert(1)" }}
           />
           <button
