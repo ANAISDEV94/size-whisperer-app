@@ -23,21 +23,17 @@ function useTargetBrand() {
   }, []);
 }
 
-// Size offset helpers
+// Size offset helpers — respect the target brand's scale
 const NUMERIC_ORDER = ["00", "0", "2", "4", "6", "8", "10", "12", "14", "16", "18", "20"];
 const LETTER_ORDER = ["XXXS", "XXS", "XS", "S", "M", "L", "XL", "2X", "3X", "4X"];
 
-function offsetSize(size: string, delta: number): string {
+function offsetSize(size: string, delta: number, scale: "numeric" | "letter"): string {
   const upper = size.toUpperCase().trim();
-  const ni = NUMERIC_ORDER.indexOf(upper);
-  if (ni !== -1) {
-    const next = ni + delta;
-    return NUMERIC_ORDER[Math.max(0, Math.min(next, NUMERIC_ORDER.length - 1))];
-  }
-  const li = LETTER_ORDER.indexOf(upper);
-  if (li !== -1) {
-    const next = li + delta;
-    return LETTER_ORDER[Math.max(0, Math.min(next, LETTER_ORDER.length - 1))];
+  const order = scale === "numeric" ? NUMERIC_ORDER : LETTER_ORDER;
+  const idx = order.indexOf(upper);
+  if (idx !== -1) {
+    const next = idx + delta;
+    return order[Math.max(0, Math.min(next, order.length - 1))];
   }
   return size;
 }
@@ -117,7 +113,7 @@ const ExtensionPanel = () => {
 
   const handleSizeDown = useCallback(() => {
     if (recommendation) {
-      const newSize = offsetSize(recommendation.size, -1);
+      const newSize = offsetSize(recommendation.size, -1, recommendation.sizeScale);
       setConfirmedSize(newSize);
       logAdjustment("size_down", newSize);
     }
@@ -126,7 +122,7 @@ const ExtensionPanel = () => {
 
   const handleSizeUp = useCallback(() => {
     if (recommendation) {
-      const newSize = offsetSize(recommendation.size, 1);
+      const newSize = offsetSize(recommendation.size, 1, recommendation.sizeScale);
       setConfirmedSize(newSize);
       logAdjustment("size_up", newSize);
     }

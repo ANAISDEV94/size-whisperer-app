@@ -121,8 +121,7 @@ function findClosestSize(
   return { size: resultSize, fitNotes: bestSize.fit_notes };
 }
 
-// ── Fallback: simple size mapping when no measurement data ──────
-// Maps between letter and numeric sizes based on standard US sizing
+// ── Size scale conversion ────────────────────────────────────────
 const LETTER_TO_NUMERIC: Record<string, string> = {
   XXXS: "00", XXS: "0", XS: "2", S: "4", M: "6", L: "10", XL: "12", "2X": "16", "3X": "18", "4X": "20"
 };
@@ -130,9 +129,28 @@ const NUMERIC_TO_LETTER: Record<string, string> = {
   "00": "XXXS", "0": "XXS", "2": "XS", "4": "S", "6": "M", "8": "M", "10": "L", "12": "XL", "14": "XL", "16": "2X", "18": "3X", "20": "4X"
 };
 
-function fallbackSizeMapping(anchorSize: string, fitPreference: string): string {
-  // If the anchor size is already in the target scale, use it directly
-  let resultSize = anchorSize.toUpperCase().trim();
+function isNumericSize(size: string): boolean {
+  return NUMERIC_ORDER.includes(size.toUpperCase().trim());
+}
+
+function isLetterSize(size: string): boolean {
+  return LETTER_ORDER.includes(size.toUpperCase().trim());
+}
+
+function convertToScale(size: string, targetScale: string): string {
+  const upper = size.toUpperCase().trim();
+  if (targetScale === "letter" && isNumericSize(upper)) {
+    return NUMERIC_TO_LETTER[upper] || upper;
+  }
+  if (targetScale === "numeric" && isLetterSize(upper)) {
+    return LETTER_TO_NUMERIC[upper] || upper;
+  }
+  return upper;
+}
+
+function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetScale: string): string {
+  // Convert anchor size to the target brand's scale
+  let resultSize = convertToScale(anchorSize, targetScale);
 
   // Apply fit preference
   if (fitPreference === "fitted") {
@@ -329,12 +347,13 @@ Deno.serve(async (req) => {
     // 1. Fetch target brand info
     const { data: targetBrand } = await supabase
       .from("brand_catalog")
-      .select("display_name, fit_tendency")
+      .select("display_name, fit_tendency, size_scale")
       .eq("brand_key", target_brand_key)
       .single();
 
     const targetDisplayName = targetBrand?.display_name || target_brand_key;
     const targetFitTendency = targetBrand?.fit_tendency || null;
+    const targetSizeScale = targetBrand?.size_scale || "letter";
 
     // 2. Fetch sizing charts for target brand
     const category = target_category || "tops";
@@ -372,17 +391,18 @@ Deno.serve(async (req) => {
           fit_preference || "true_to_size"
         );
         if (result) {
-          recommendedSize = result.size;
+          // Ensure result is in the target brand's scale
+          recommendedSize = convertToScale(result.size, targetSizeScale);
           fitNotes = result.fitNotes;
         } else {
-          recommendedSize = fallbackSizeMapping(anchorBrand.size, fit_preference || "true_to_size");
+          recommendedSize = fallbackSizeMapping(anchorBrand.size, fit_preference || "true_to_size", targetSizeScale);
         }
       } else {
-        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size");
+        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale);
       }
     } else {
-      // Fallback: direct size mapping
-      recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size");
+      // Fallback: direct size mapping with scale conversion
+      recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale);
     }
 
     // 5. Generate AI bullets
@@ -424,6 +444,7 @@ Deno.serve(async (req) => {
       JSON.stringify({
         size: recommendedSize,
         brandName: targetDisplayName,
+        sizeScale: targetSizeScale,
         bullets,
         comparisons,
         recommendation_id: recommendationId,
