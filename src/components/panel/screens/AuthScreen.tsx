@@ -4,12 +4,11 @@ import altaanaLogo from "@/assets/altaana-modal-logo.png";
 interface AuthScreenProps {
   onGoogleSignIn: () => void;
   onEmailSignIn: () => void;
-  onSignUp: () => void;
   onContinueWithout: () => void;
   onClose?: () => void;
 }
 
-const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onSignUp, onContinueWithout, onClose }: AuthScreenProps) => {
+const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose }: AuthScreenProps) => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-end">
       {/* Backdrop */}
@@ -118,21 +117,20 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onSignUp, onContinueWithout
             Continue with email
           </button>
 
-          {/* Sign Up CTA */}
+          {/* Tertiary — Continue without */}
           <button
-            onClick={onSignUp}
-            className="flex items-center justify-center gap-3 rounded-full cursor-pointer mt-3.5 transition-opacity hover:opacity-80 mx-auto"
+            onClick={onContinueWithout}
+            className="mt-7 cursor-pointer transition-opacity hover:opacity-80 self-center"
             style={{
-              height: 48.5,
-              width: 334,
-              background: "transparent",
-              border: "1px solid rgba(255, 255, 255, 0.15)",
-              fontSize: 16,
-              fontWeight: 400,
-              color: "rgba(255, 255, 255, 0.8)",
+              background: "none",
+              border: "none",
+              fontSize: 14,
+              color: "rgba(255, 255, 255, 0.4)",
+              textDecoration: "underline",
+              textUnderlineOffset: 4,
             }}
           >
-            Create an account
+            Continue without saving
           </button>
 
           {/* Tertiary — Continue without */}
