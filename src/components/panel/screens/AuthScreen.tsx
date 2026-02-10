@@ -16,9 +16,11 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose 
 
       {/* Right-side panel with 16px gap from edge */}
       <div
-        className="relative z-10 flex flex-col my-4 mr-4"
+        className="relative z-10 flex flex-col my-auto mr-4"
         style={{
-          width: 420,
+          width: 404,
+          height: 733,
+          flexShrink: 0,
           borderRadius: 20,
           background: "linear-gradient(180deg, #151213 0%, #0a0809 40%, #070506 100%)",
           border: "1px solid rgba(0, 206, 209, 0.18)",
