@@ -74,13 +74,7 @@ const ExtensionPanel = () => {
   const renderScreen = () => {
     switch (panelState) {
       case "auth":
-        return (
-          <AuthScreen
-            onGoogleSignIn={handleAuth}
-            onEmailSignIn={handleAuth}
-            onContinueWithout={handleAuth}
-          />
-        );
+        return null;
       case "profile":
         return <ProfileScreen onSave={handleProfileSave} />;
       case "analyzing":
@@ -108,8 +102,18 @@ const ExtensionPanel = () => {
 
   return (
     <>
+      {/* Auth modal — shown as overlay, independent of panel */}
+      {panelState === "auth" && (
+        <AuthScreen
+          onGoogleSignIn={handleAuth}
+          onEmailSignIn={handleAuth}
+          onContinueWithout={handleAuth}
+          onClose={() => setPanelState("auth")}
+        />
+      )}
+
       <AnimatePresence>
-        {!isOpen && (
+        {!isOpen && panelState !== "auth" && (
           <FloatingWidget
             onClick={handleOpen}
             confirmedSize={confirmedSize}
