@@ -5,12 +5,15 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronDown, Plus, X } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import type { User } from "@supabase/supabase-js";
 
 interface ProfileScreenProps {
   onSave: (profile: UserProfile) => void;
+  user?: User | null;
 }
 
-const ProfileScreen = ({ onSave }: ProfileScreenProps) => {
+const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
   const [anchors, setAnchors] = useState<AnchorBrand[]>([{ brandKey: "", displayName: "", size: "" }]);
   const [fitPreference, setFitPreference] = useState<FitPreference>("true_to_size");
   const [openBrandIndex, setOpenBrandIndex] = useState<number | null>(null);
@@ -38,10 +41,22 @@ const ProfileScreen = ({ onSave }: ProfileScreenProps) => {
 
   const canSave = anchors.every((a) => a.displayName && a.size);
 
-  const handleSave = () => {
-    if (canSave) {
-      onSave({ anchorBrands: anchors, fitPreference });
+  const handleSave = async () => {
+    if (!canSave) return;
+    const profile: UserProfile = { anchorBrands: anchors, fitPreference };
+
+    // Persist to database for authenticated users
+    if (user) {
+      await supabase
+        .from("profiles")
+        .update({
+          anchor_brands: anchors as unknown as Record<string, unknown>,
+          fit_preference: fitPreference,
+        } as Record<string, unknown>)
+        .eq("user_id", user.id);
     }
+
+    onSave(profile);
   };
 
   const fitOptions: { label: string; value: FitPreference }[] = [

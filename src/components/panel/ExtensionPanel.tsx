@@ -102,7 +102,7 @@ const ExtensionPanel = () => {
   const renderScreen = () => {
     switch (panelState) {
       case "profile":
-        return <ProfileScreen onSave={handleProfileSave} />;
+        return <ProfileScreen onSave={handleProfileSave} user={user} />;
       case "analyzing":
         return <AnalyzingScreen />;
       case "recommendation":
