@@ -129,6 +129,28 @@ const NUMERIC_TO_LETTER: Record<string, string> = {
   "00": "XXXS", "0": "XXS", "2": "XS", "4": "S", "6": "M", "8": "M", "10": "L", "12": "XL", "14": "XL", "16": "2X", "18": "3X", "20": "4X"
 };
 
+// Universal size-to-index mapping for cross-scale comparison
+// Maps any size system to a normalized 0-based position
+const UNIVERSAL_SIZE_MAP: Record<string, number> = {
+  // US numeric
+  "00": 0, "0": 1, "2": 2, "4": 3, "6": 4, "8": 5, "10": 6, "12": 7, "14": 8, "16": 9, "18": 10, "20": 11,
+  // US letter
+  "XXXS": 0, "XXS": 1, "XS": 2, "S": 3, "M": 4, "L": 6, "XL": 7, "2X": 9, "3X": 10, "4X": 11,
+  // EU/IT numeric
+  "34": 0, "36": 1, "38": 2, "40": 3, "42": 4, "44": 5, "46": 6, "48": 7,
+  // Zimmermann scale (0-5, roughly maps to US 0-10)
+  "1": 2, "3": 4, "5": 6,
+};
+
+function getUniversalIndex(size: string): number {
+  const upper = size.toUpperCase().trim();
+  if (UNIVERSAL_SIZE_MAP[upper] !== undefined) return UNIVERSAL_SIZE_MAP[upper];
+  // Try parsing as number for unknown numeric sizes
+  const num = parseFloat(upper);
+  if (!isNaN(num)) return num;
+  return -1;
+}
+
 function isNumericSize(size: string): boolean {
   return NUMERIC_ORDER.includes(size.toUpperCase().trim());
 }
@@ -148,8 +170,36 @@ function convertToScale(size: string, targetScale: string): string {
   return upper;
 }
 
-function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetScale: string): string {
-  // Convert anchor size to the target brand's scale
+// Snap a size to the closest valid size from the target brand's available_sizes
+function snapToAvailableSize(size: string, availableSizes: string[], fitPreference: string): string {
+  if (!availableSizes.length) return size;
+  
+  const upper = size.toUpperCase().trim();
+  // If already valid, return it
+  if (availableSizes.map(s => s.toUpperCase()).includes(upper)) return upper;
+
+  // Find closest by universal index
+  const inputIdx = getUniversalIndex(upper);
+  if (inputIdx === -1) return availableSizes[Math.floor(availableSizes.length / 2)]; // default to middle
+
+  let bestSize = availableSizes[0];
+  let bestDist = Infinity;
+
+  for (const avail of availableSizes) {
+    const availIdx = getUniversalIndex(avail);
+    if (availIdx === -1) continue;
+    const dist = Math.abs(availIdx - inputIdx);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestSize = avail;
+    }
+  }
+
+  return bestSize;
+}
+
+function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetScale: string, availableSizes: string[]): string {
+  // First try standard scale conversion
   let resultSize = convertToScale(anchorSize, targetScale);
 
   // Apply fit preference
@@ -159,6 +209,11 @@ function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetSc
   } else if (fitPreference === "relaxed") {
     const up = sizeUp(resultSize);
     if (up) resultSize = up;
+  }
+
+  // Snap to available sizes for the target brand
+  if (availableSizes.length) {
+    resultSize = snapToAvailableSize(resultSize, availableSizes, fitPreference);
   }
 
   return resultSize;
@@ -424,13 +479,14 @@ Deno.serve(async (req) => {
     // 1. Fetch target brand info
     const { data: targetBrand } = await supabase
       .from("brand_catalog")
-      .select("display_name, fit_tendency, size_scale")
+      .select("display_name, fit_tendency, size_scale, available_sizes")
       .eq("brand_key", target_brand_key)
       .single();
 
     const targetDisplayName = targetBrand?.display_name || target_brand_key;
     const targetFitTendency = targetBrand?.fit_tendency || null;
     const targetSizeScale = targetBrand?.size_scale || "letter";
+    const availableSizes: string[] = (targetBrand?.available_sizes as string[]) || [];
 
     // 2. Fetch sizing charts for target brand
     const category = target_category || "tops";
@@ -453,7 +509,6 @@ Deno.serve(async (req) => {
     let fitNotes: string | null = null;
 
     if (targetSizingData?.length && anchorSizingData?.length) {
-      // Full measurement-based comparison
       const anchorBrand = anchor_brands[0];
       const anchorRow = anchorSizingData.find(
         (r: SizingRow & { brand_key: string }) =>
@@ -468,18 +523,21 @@ Deno.serve(async (req) => {
           fit_preference || "true_to_size"
         );
         if (result) {
-          // Ensure result is in the target brand's scale
           recommendedSize = convertToScale(result.size, targetSizeScale);
           fitNotes = result.fitNotes;
         } else {
-          recommendedSize = fallbackSizeMapping(anchorBrand.size, fit_preference || "true_to_size", targetSizeScale);
+          recommendedSize = fallbackSizeMapping(anchorBrand.size, fit_preference || "true_to_size", targetSizeScale, availableSizes);
         }
       } else {
-        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale);
+        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes);
       }
     } else {
-      // Fallback: direct size mapping with scale conversion
-      recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale);
+      recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes);
+    }
+
+    // Final snap: ensure recommendedSize is one the target brand actually sells
+    if (availableSizes.length) {
+      recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size");
     }
 
     // 5. Scrape product-specific fit info if URL provided
