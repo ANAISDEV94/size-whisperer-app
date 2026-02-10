@@ -8,6 +8,7 @@ const corsHeaders = {
 
 // ── Brand name → brand_key mapping ──────────────────────────────
 const BRAND_KEY_MAP: Record<string, string> = {
+  // Full display names
   "&/Or Collective": "and_or_collective",
   "7 For All Mankind": "seven_for_all_mankind",
   "Alaïa": "alaia",
@@ -46,6 +47,17 @@ const BRAND_KEY_MAP: Record<string, string> = {
   Versace: "versace",
   "Victoria Beckham": "victoria_beckham",
   Zimmermann: "zimmermann",
+  // Airtable shorthand / alternate names
+  ALO: "alo_yoga",
+  Alo: "alo_yoga",
+  alo: "alo_yoga",
+  "DOLCE & GABBANA": "dolce_and_gabbana",
+  "D&G": "dolce_and_gabbana",
+  skims: "skims",
+  "NIKE X SKIMS": "nikeskims",
+  "Nike x Skims": "nikeskims",
+  lululemon: "lululemon",
+  LULULEMON: "lululemon",
 };
 
 function toBrandKey(name: string): string {
@@ -196,30 +208,59 @@ async function fetchAllRecords(
   return records;
 }
 
-// ── Known measurement field names (lowercase) ───────────────────
-const MEASUREMENT_FIELDS = [
-  "bust",
-  "chest",
-  "waist",
-  "hips",
-  "hip",
-  "shoulder",
-  "shoulders",
-  "length",
-  "inseam",
-  "rise",
-  "thigh",
-  "sleeve",
-  "arm",
-  "neck",
-  "torso",
-];
+// ── Airtable field name handling ─────────────────────────────────
+// Airtable columns often have units in brackets like "Bust (inches)"
+// or alternate names like "Low Hip (inches)" meaning "hips"
 
-function isMeasurementField(fieldName: string): boolean {
-  const lower = fieldName.toLowerCase();
-  return MEASUREMENT_FIELDS.some(
-    (m) => lower.includes(m) || lower === m
-  );
+const FIELD_NAME_MAP: Record<string, string> = {
+  bust: "bust",
+  chest: "bust",
+  waist: "waist",
+  hips: "hips",
+  hip: "hips",
+  "low hip": "hips",
+  shoulder: "shoulders",
+  shoulders: "shoulders",
+  length: "length",
+  "pants/denim length": "length",
+  inseam: "inseam",
+  rise: "rise",
+  thigh: "thigh",
+  sleeve: "sleeve_length",
+  "sleeve length": "sleeve_length",
+  arm: "sleeve_length",
+  neck: "neck",
+  torso: "torso",
+  underbust: "underbust",
+  "jump size": "jump_size",
+  "us conversion size": "us_conversion_size",
+  "bra size": "bra_size",
+  "bra sizes": "bra_size",
+  "bras size": "bra_size",
+  notes: "_notes",
+};
+
+function normalizeFieldName(rawFieldName: string): { key: string; isMeasurement: boolean } {
+  // Strip content in brackets like "(inches)", "(in)", "(cm)"
+  const cleaned = rawFieldName
+    .replace(/\s*\(.*?\)\s*/g, "")
+    .trim()
+    .toLowerCase();
+
+  const mapped = FIELD_NAME_MAP[cleaned];
+  if (mapped) {
+    // Fields starting with _ are metadata, not measurements
+    return { key: mapped, isMeasurement: !mapped.startsWith("_") };
+  }
+
+  // Fallback: check if any known field name is contained
+  for (const [pattern, normalizedKey] of Object.entries(FIELD_NAME_MAP)) {
+    if (cleaned.includes(pattern)) {
+      return { key: normalizedKey, isMeasurement: !normalizedKey.startsWith("_") };
+    }
+  }
+
+  return { key: cleaned, isMeasurement: false };
 }
 
 // ── Main handler ────────────────────────────────────────────────
@@ -297,19 +338,24 @@ Deno.serve(async (req) => {
 
         const brandKey = toBrandKey(brandName);
 
-        // Extract measurement fields
+        // Extract measurement fields using field name normalization
         const rawMeasurements: Record<string, string> = {};
+        let fitNotes: string | null = null;
+        const skipFields = ["brand", "category", "size", "garment category", "brand name", "size label"];
+
         for (const [key, val] of Object.entries(fields)) {
-          if (isMeasurementField(key) && typeof val === "string") {
-            rawMeasurements[key.toLowerCase()] = val;
+          if (typeof val !== "string") continue;
+          const lowerKey = key.toLowerCase().replace(/\s*\(.*?\)\s*/g, "").trim();
+          if (skipFields.includes(lowerKey)) continue;
+
+          const { key: normalizedKey, isMeasurement } = normalizeFieldName(key);
+
+          if (normalizedKey === "_notes") {
+            fitNotes = val || null;
+          } else if (isMeasurement) {
+            rawMeasurements[normalizedKey] = val;
           }
         }
-
-        const fitNotes =
-          (fields["Fit Notes"] as string) ||
-          (fields["fit_notes"] as string) ||
-          (fields["Notes"] as string) ||
-          null;
 
         const measurements = normalizeRecord(rawMeasurements);
 
