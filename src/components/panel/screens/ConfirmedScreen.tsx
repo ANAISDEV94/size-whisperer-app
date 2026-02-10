@@ -40,7 +40,7 @@ const ConfirmedScreen = ({ recommendation, onAddToCart }: ConfirmedScreenProps) 
         className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-full text-sm mb-6 mx-auto"
         style={{ height: 48.5, width: 334 }}
       >
-        Add to cart with my size
+        Go to size selector
       </Button>
 
       {/* Why this recommendation */}
