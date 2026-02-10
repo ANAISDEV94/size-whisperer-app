@@ -1,218 +1,59 @@
 
 
-# Milestone 4 — Brand Data + Airtable Integration
+# Fix Brand Sizes in Profile Onboarding + Airtable Sync
 
-This milestone sets up the database tables for brand/sizing data, builds the Airtable sync edge function with robust measurement normalization, and extends the profiles table to persist sizing profiles.
+## Problem
 
----
+The size picker in the profile onboarding screen shows incorrect sizes for many brands. For example, **7 For All Mankind** shows standard US sizes (00, 0, 2, 4...) when it should show denim waist sizes (22, 23, 24, 25...). This affects at least 5-6 brands.
 
-## Overview
+## Plan
 
-```text
-+------------------+       Edge Function        +-------------------+
-|   Airtable Base  |  ---- sync-airtable ---->  |  Lovable Cloud DB |
-|  (sizing charts) |                            |                   |
-+------------------+                            |  brand_catalog    |
-                                                |  sizing_charts    |
-                                                |  profiles (extended)
-                                                +-------------------+
-```
+### Step 1: Run Airtable Sync
 
-The sync edge function fetches records from Airtable, normalizes messy measurement strings, and upserts them into the database. Both raw and normalized values are stored.
+Trigger the `sync-airtable` backend function to pull actual sizing chart data from Airtable. This populates the `sizing_charts` table with real size labels per brand, giving us ground truth to verify against.
 
----
+### Step 2: Update `available_sizes` for All Incorrect Brands
 
-## Step 1: Database Schema Migration
+After reviewing the synced data, update the `brand_catalog` table with corrected sizes. Known corrections:
 
-Create three new tables and extend the existing `profiles` table.
+| Brand | Current Sizes | Corrected Sizes | Scale |
+|-------|--------------|-----------------|-------|
+| 7 For All Mankind | 00, 0, 2, 4, 6, 8, 10, 12, 14 | 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32 | denim |
+| Mother | 00, 0, 2, 4, 6, 8, 10, 12, 14 | 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34 | denim |
+| Revolve Denim | 00, 0, 2, 4, 6, 8, 10, 12, 14 | 23, 24, 25, 26, 27, 28, 29, 30, 31, 32 | denim |
+| Retrofete | XS, S, M, L, XL (scale: numeric) | Fix scale to "letter" |
+| Torrid | 10-30 (scale: letter) | Fix scale to "numeric" |
+| Alaïa | 34-48 (scale: letter) | Fix scale to "eu" |
+| Balmain | 34-48 (scale: numeric) | Fix scale to "eu" |
+| Other EU brands (Dolce, Gucci, Prada, etc.) | 34-48 (scale: numeric) | Fix scale to "eu" |
 
-### 1a. `brand_catalog` table
-Stores each supported brand with its domain mappings and general fit tendency.
+The exact sizes for each brand will be refined using the synced Airtable data as the source of truth.
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID (PK) | Auto-generated |
-| brand_key | TEXT (unique) | Normalized key, e.g. `alo_yoga` |
-| display_name | TEXT | Human-readable, e.g. "Alo Yoga" |
-| domains | TEXT[] | Array of domains, e.g. `{"aloyoga.com"}` |
-| fit_tendency | TEXT | "runs_small", "true_to_size", "runs_large", or null |
-| garment_categories | TEXT[] | e.g. `{"tops", "bottoms", "dresses"}` |
-| created_at | TIMESTAMPTZ | Default now() |
-| updated_at | TIMESTAMPTZ | Default now() |
+### Step 3: Auto-Derive Sizes from Synced Data (Enhancement)
 
-RLS: Public read (no auth needed to look up brands), no public write.
+After the sync, query `sizing_charts` to extract the distinct `size_label` values per brand. Use these to update any `brand_catalog` entries that don't match reality. This ensures future Airtable syncs can automatically keep `available_sizes` accurate.
 
-### 1b. `sizing_charts` table
-Stores per-brand, per-category, per-size measurement data with both raw and normalized values.
+### Step 4: Update Universal Size Map in Recommendation Engine
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID (PK) | Auto-generated |
-| brand_key | TEXT (FK to brand_catalog) | |
-| category | TEXT | e.g. "tops", "bottoms", "dresses" |
-| size_label | TEXT | e.g. "M", "6", "Large" |
-| measurements | JSONB | Normalized structure (see below) |
-| raw_measurements | JSONB | Original values from Airtable as-is |
-| fit_notes | TEXT | Brand/category specific notes |
-| airtable_record_id | TEXT | For upsert tracking |
-| synced_at | TIMESTAMPTZ | Last sync timestamp |
-| created_at | TIMESTAMPTZ | Default now() |
+Add "denim" scale entries to the `BRAND_SCALE_MAPS` in the `recommend-size` backend function so cross-brand recommendations work correctly when a denim brand (like 7 For All Mankind size 27) is the anchor.
 
-RLS: Public read, no public write.
+### Step 5: Clear Frontend Cache
 
-### 1c. Extend `profiles` table
-Add columns for the sizing profile data that is currently only stored in local state.
-
-| New Column | Type | Notes |
-|------------|------|-------|
-| anchor_brands | JSONB | Array of `{brand_key, display_name, size}` (up to 2) |
-| fit_preference | TEXT | "fitted", "true_to_size", or "relaxed" |
-
-### 1d. Create tables for logging (preparing for Milestone 5/6)
-
-**`recommendations`** table:
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID (PK) | |
-| user_id | UUID | References auth.users |
-| brand_key | TEXT | Target brand |
-| product_url | TEXT | URL of the product page |
-| recommended_size | TEXT | The size we recommended |
-| explanation_bullets | JSONB | Array of 3 bullet strings |
-| created_at | TIMESTAMPTZ | |
-
-**`user_adjustments`** table:
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID (PK) | |
-| recommendation_id | UUID | FK to recommendations |
-| action | TEXT | "size_down", "keep", or "size_up" |
-| final_size | TEXT | The size after adjustment |
-| created_at | TIMESTAMPTZ | |
-
-RLS for recommendations/user_adjustments: Users can read/insert their own records only.
+The `ProfileScreen` caches brand sizes in memory (`brandSizesCache`). Add cache invalidation or ensure the cache is keyed properly so updated database values are reflected immediately.
 
 ---
 
-## Step 2: Measurement Normalization Logic
+## Technical Details
 
-The core of this milestone. A normalization module inside the edge function that converts messy Airtable strings into a consistent structure.
+### Database updates (data operations, not schema changes)
+Multiple `UPDATE` statements against `brand_catalog` to fix `available_sizes`, `size_scale` for ~15 brands.
 
-### Normalized measurement format (JSONB)
+### Edge function changes
+- `recommend-size/index.ts`: Add denim scale mappings (e.g., waist size 24 maps to roughly US size 0, waist 26 to US 2, etc.) to `BRAND_SCALE_MAPS` and `UNIVERSAL_SIZE_MAP`.
 
-```text
-{
-  "bust": { "min": 34, "max": 35, "unit": "in" },
-  "waist": { "min": 26, "max": 27, "unit": "in" },
-  "hips": { "options": [34, 35], "unit": "in" }
-}
-```
+### Frontend changes
+- `ProfileScreen.tsx`: Minor fix to clear the `brandSizesCache` module-level variable when needed, or convert to a React ref so it respects component lifecycle.
 
-Each measurement field becomes an object with either:
-- `min` + `max` (for ranges like "34-35")
-- `options` array (for OR values like "34/35")
-- `value` (for single values like "34")
-
-### Parsing rules
-
-| Input Pattern | Interpretation | Normalized Output |
-|---------------|---------------|-------------------|
-| `"34"` | Single value | `{ "value": 34 }` |
-| `"34-35"`, `"34 - 35"`, `"34--35"` | Range (hyphen/en-dash/em-dash) | `{ "min": 34, "max": 35 }` |
-| `"34/35"`, `"34\35"` | OR options | `{ "options": [34, 35] }` |
-| `"34-35 / 36"` | Range OR single | `{ "options": [{"min":34,"max":35}, 36] }` |
-| `""` or whitespace-only | Empty/missing | `null` |
-| Non-numeric text (e.g. "Petite") | Descriptive note | `{ "note": "Petite" }` |
-
-### Implementation approach
-- Strip all whitespace around delimiters
-- Detect delimiter priority: slash/backslash first (splits into OR options), then dash/en-dash/em-dash (splits into range)
-- Parse each segment as a number; if not numeric, store as a `note`
-- Always preserve the `unit` field (default "in" for inches; detect "cm" if present)
-
----
-
-## Step 3: Airtable Sync Edge Function
-
-**File:** `supabase/functions/sync-airtable/index.ts`
-
-### Prerequisites
-- An Airtable API key must be stored as a secret (name: `AIRTABLE_API_KEY`)
-- The Airtable base ID and table name will need to be provided (stored as secrets or hardcoded if stable: `AIRTABLE_BASE_ID`, `AIRTABLE_TABLE_NAME`)
-
-### Flow
-
-```text
-1. Fetch all records from Airtable (paginated)
-2. For each record:
-   a. Extract brand name, category, size label, measurement fields
-   b. Normalize brand name to brand_key
-   c. Store raw measurement values in raw_measurements
-   d. Run normalization function on each measurement field
-   e. Store normalized values in measurements
-3. Upsert into sizing_charts (keyed on airtable_record_id)
-4. Upsert brand info into brand_catalog
-5. Return summary (records synced, errors encountered)
-```
-
-### Configuration
-
-In `supabase/config.toml`, add:
-```text
-[functions.sync-airtable]
-verify_jwt = false
-```
-
-JWT verification is disabled so it can be called by a cron job, but the function will check for a shared secret or service role key to prevent unauthorized access.
-
-### Brand name normalization mapping
-A lookup table in the function maps display names to brand_keys:
-- "Alo Yoga" -> `alo_yoga`
-- "7 For All Mankind" -> `seven_for_all_mankind`
-- "&/Or Collective" -> `and_or_collective`
-- etc.
-
-This is derived from the existing `SUPPORTED_BRANDS` array.
-
----
-
-## Step 4: Seed `brand_catalog` with Supported Brands
-
-An initial migration (or part of the sync function's first run) seeds the `brand_catalog` table with all 38 brands from `SUPPORTED_BRANDS`, including known domain mappings for the pilot brands:
-- Alo Yoga: `aloyoga.com`
-- CSB: `revolve.com` (with brand detection logic needed later)
-
-Other brand domains will be filled in progressively.
-
----
-
-## Step 5: Update ProfileScreen to Persist to Database
-
-Modify `ProfileScreen.tsx` and `ExtensionPanel.tsx` so that when a logged-in user saves their profile, the `anchor_brands` and `fit_preference` fields are written to the `profiles` table via Supabase client. Guest users continue with local-only state.
-
----
-
-## Step 6: Secret Setup
-
-Before the edge function can work, three secrets need to be configured:
-- `AIRTABLE_API_KEY` — the user's Airtable personal access token
-- `AIRTABLE_BASE_ID` — the ID of the Airtable base containing sizing data
-- `AIRTABLE_TABLE_NAME` — the table name within that base
-
-These will be requested from the user before implementing the edge function.
-
----
-
-## Technical Summary
-
-| Component | Action |
-|-----------|--------|
-| Database migration | Create `brand_catalog`, `sizing_charts`, `recommendations`, `user_adjustments` tables; add `anchor_brands` and `fit_preference` columns to `profiles` |
-| Edge function | `sync-airtable/index.ts` with Airtable fetch, normalization module, and upsert logic |
-| Normalization module | Parse ranges (dash), OR values (slash), singles, blanks, and non-numeric text into structured JSONB |
-| Frontend | Update `ProfileScreen` to save profile data to the database for authenticated users |
-| Secrets | Request `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`, `AIRTABLE_TABLE_NAME` from user |
-| Brand seed | Populate `brand_catalog` with all 38 brands and known domains |
+### Airtable sync
+- Trigger the existing `sync-airtable` function, then query `sizing_charts` to validate/refine the corrected sizes.
 
