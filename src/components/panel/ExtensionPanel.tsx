@@ -27,17 +27,25 @@ const MOCK_RECOMMENDATION: SizeRecommendation = {
 
 const ExtensionPanel = () => {
   const [isOpen, setIsOpen] = useState(false);
-  const [panelState, setPanelState] = useState<PanelState>("auth");
+  const [hasAuthenticated, setHasAuthenticated] = useState(false);
+  const [panelState, setPanelState] = useState<PanelState>("profile");
   const [, setProfile] = useState<UserProfile | null>(null);
   const [recommendation] = useState<SizeRecommendation>(MOCK_RECOMMENDATION);
   const [confirmedSize, setConfirmedSize] = useState<string | null>(null);
   const [confirmedBrand, setConfirmedBrand] = useState<string | null>(null);
 
-  const handleOpen = useCallback(() => setIsOpen(true), []);
+  const handleOpen = useCallback(() => {
+    if (!hasAuthenticated) {
+      setIsOpen(true);
+      setPanelState("auth");
+    } else {
+      setIsOpen(true);
+    }
+  }, [hasAuthenticated]);
   const handleClose = useCallback(() => setIsOpen(false), []);
 
   const handleAuth = useCallback(() => {
-    // Placeholder — will connect to Lovable Cloud auth later
+    setHasAuthenticated(true);
     setPanelState("profile");
   }, []);
 
@@ -74,7 +82,7 @@ const ExtensionPanel = () => {
   const renderScreen = () => {
     switch (panelState) {
       case "auth":
-        return null;
+        return null; // Auth is rendered as overlay below
       case "profile":
         return <ProfileScreen onSave={handleProfileSave} />;
       case "analyzing":
@@ -102,18 +110,18 @@ const ExtensionPanel = () => {
 
   return (
     <>
-      {/* Auth modal — shown as overlay, independent of panel */}
-      {panelState === "auth" && (
+      {/* Auth modal — shown as overlay when user clicks widget for the first time */}
+      {isOpen && panelState === "auth" && (
         <AuthScreen
           onGoogleSignIn={handleAuth}
           onEmailSignIn={handleAuth}
           onContinueWithout={handleAuth}
-          onClose={() => setPanelState("auth")}
+          onClose={handleClose}
         />
       )}
 
       <AnimatePresence>
-        {!isOpen && panelState !== "auth" && (
+        {!isOpen && (
           <FloatingWidget onClick={handleOpen} />
         )}
       </AnimatePresence>
