@@ -20,6 +20,7 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose 
         style={{
           width: 404,
           height: 733,
+          maxHeight: "calc(100vh - 32px)",
           flexShrink: 0,
           borderRadius: 20,
           background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",

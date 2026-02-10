@@ -134,6 +134,7 @@ const ExtensionPanel = () => {
               style={{
                 width: 404,
                 height: 733,
+                maxHeight: "calc(100vh - 32px)",
                 borderRadius: 20,
                 background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",
                 border: "1px solid rgba(0, 206, 209, 0.18)",
