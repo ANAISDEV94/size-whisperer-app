@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { PanelState, UserProfile, SizeRecommendation } from "@/types/panel";
+import { useAuth } from "@/hooks/useAuth";
 import FloatingWidget from "./FloatingWidget";
 import PanelHeader from "./PanelHeader";
 import AuthScreen from "./screens/AuthScreen";
@@ -26,63 +27,80 @@ const MOCK_RECOMMENDATION: SizeRecommendation = {
 };
 
 const ExtensionPanel = () => {
+  const { user, isLoading, signUp, signIn, signInWithGoogle, signOut } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
-  const [hasAuthenticated, setHasAuthenticated] = useState(false);
+  const [showAuth, setShowAuth] = useState(false);
   const [panelState, setPanelState] = useState<PanelState>("profile");
   const [, setProfile] = useState<UserProfile | null>(null);
   const [recommendation] = useState<SizeRecommendation>(MOCK_RECOMMENDATION);
-  const [confirmedSize, setConfirmedSize] = useState<string | null>(null);
-  const [confirmedBrand, setConfirmedBrand] = useState<string | null>(null);
 
   const handleOpen = useCallback(() => {
-    if (!hasAuthenticated) {
-      setIsOpen(true);
-      setPanelState("auth");
+    if (!user) {
+      // First-time or logged-out user: show auth
+      setShowAuth(true);
     } else {
+      // Returning user: go straight to panel
       setIsOpen(true);
     }
-  }, [hasAuthenticated]);
-  const handleClose = useCallback(() => setIsOpen(false), []);
+  }, [user]);
 
-  const handleAuth = useCallback(() => {
-    setHasAuthenticated(true);
+  const handleClose = useCallback(() => {
+    setIsOpen(false);
+    setShowAuth(false);
+  }, []);
+
+  const handleAuthComplete = useCallback(() => {
+    // Auth succeeded or user chose to continue without saving
+    setShowAuth(false);
+    setIsOpen(true);
     setPanelState("profile");
   }, []);
+
+  const handleGoogleSignIn = useCallback(async () => {
+    const result = await signInWithGoogle();
+    if (!result.error) {
+      handleAuthComplete();
+    }
+  }, [signInWithGoogle, handleAuthComplete]);
+
+  const handleEmailSignIn = useCallback(async (email: string, password: string) => {
+    const result = await signIn(email, password);
+    if (!result.error) {
+      handleAuthComplete();
+    }
+    return result;
+  }, [signIn, handleAuthComplete]);
+
+  const handleEmailSignUp = useCallback(async (email: string, password: string) => {
+    const result = await signUp(email, password);
+    // Don't auto-complete — user needs to verify email first
+    return result;
+  }, [signUp]);
 
   const handleProfileSave = useCallback((profile: UserProfile) => {
     setProfile(profile);
     setPanelState("analyzing");
-    // Simulate API call
     setTimeout(() => setPanelState("recommendation"), 2000);
   }, []);
 
   const handleKeep = useCallback(() => {
-    setConfirmedSize(recommendation.size);
-    setConfirmedBrand(recommendation.brandName);
     setPanelState("confirmed");
-  }, [recommendation]);
+  }, []);
 
   const handleSizeDown = useCallback(() => {
-    setConfirmedSize(recommendation.size);
-    setConfirmedBrand(recommendation.brandName);
     setPanelState("confirmed");
-  }, [recommendation]);
+  }, []);
 
   const handleSizeUp = useCallback(() => {
-    setConfirmedSize(recommendation.size);
-    setConfirmedBrand(recommendation.brandName);
     setPanelState("confirmed");
-  }, [recommendation]);
+  }, []);
 
   const handleAddToCart = useCallback(() => {
-    // Will scroll to size selector on host page via postMessage
-    console.log("Add to cart — scroll to size selector");
+    console.log("Go to size selector — scroll to size selector");
   }, []);
 
   const renderScreen = () => {
     switch (panelState) {
-      case "auth":
-        return null; // Auth is rendered as overlay below
       case "profile":
         return <ProfileScreen onSave={handleProfileSave} />;
       case "analyzing":
@@ -108,26 +126,31 @@ const ExtensionPanel = () => {
     }
   };
 
+  if (isLoading) return null;
+
   return (
     <>
-      {/* Auth modal — shown as overlay when user clicks widget for the first time */}
-      {isOpen && panelState === "auth" && (
+      {/* Auth modal */}
+      {showAuth && (
         <AuthScreen
-          onGoogleSignIn={handleAuth}
-          onEmailSignIn={handleAuth}
-          onContinueWithout={handleAuth}
+          onGoogleSignIn={handleGoogleSignIn}
+          onEmailSignIn={handleEmailSignIn}
+          onEmailSignUp={handleEmailSignUp}
+          onContinueWithout={handleAuthComplete}
           onClose={handleClose}
         />
       )}
 
+      {/* Floating widget — visible when panel and auth are both closed */}
       <AnimatePresence>
-        {!isOpen && (
+        {!isOpen && !showAuth && (
           <FloatingWidget onClick={handleOpen} />
         )}
       </AnimatePresence>
 
+      {/* Slide-in panel */}
       <AnimatePresence>
-        {isOpen && panelState !== "auth" && (
+        {isOpen && (
           <div className="fixed right-4 top-0 bottom-0 z-50 flex items-center">
             <motion.div
               initial={{ x: "100%" }}
