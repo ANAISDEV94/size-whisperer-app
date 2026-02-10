@@ -49,6 +49,7 @@ export function useRecommendation(): UseRecommendationReturn {
       setRecommendation({
         size: data.size,
         brandName: data.brandName,
+        sizeScale: data.sizeScale || "letter",
         bullets: data.bullets,
         comparisons: data.comparisons,
       });

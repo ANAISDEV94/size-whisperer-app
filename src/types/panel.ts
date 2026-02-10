@@ -22,6 +22,7 @@ export interface UserProfile {
 export interface SizeRecommendation {
   size: string;
   brandName: string;
+  sizeScale: "numeric" | "letter";
   bullets: string[];
   comparisons: BrandComparison[];
 }

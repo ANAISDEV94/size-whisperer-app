@@ -23,6 +23,7 @@ export type Database = {
           fit_tendency: string | null
           garment_categories: string[] | null
           id: string
+          size_scale: string
           updated_at: string
         }
         Insert: {
@@ -33,6 +34,7 @@ export type Database = {
           fit_tendency?: string | null
           garment_categories?: string[] | null
           id?: string
+          size_scale?: string
           updated_at?: string
         }
         Update: {
@@ -43,6 +45,7 @@ export type Database = {
           fit_tendency?: string | null
           garment_categories?: string[] | null
           id?: string
+          size_scale?: string
           updated_at?: string
         }
         Relationships: []
