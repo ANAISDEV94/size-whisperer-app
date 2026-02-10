@@ -114,11 +114,7 @@ const ExtensionPanel = () => {
 
       <AnimatePresence>
         {!isOpen && panelState !== "auth" && (
-          <FloatingWidget
-            onClick={handleOpen}
-            confirmedSize={confirmedSize}
-            confirmedBrand={confirmedBrand}
-          />
+          <FloatingWidget onClick={handleOpen} />
         )}
       </AnimatePresence>
 
