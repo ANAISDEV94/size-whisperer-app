@@ -14,32 +14,180 @@ export type Database = {
   }
   public: {
     Tables: {
+      brand_catalog: {
+        Row: {
+          brand_key: string
+          created_at: string
+          display_name: string
+          domains: string[] | null
+          fit_tendency: string | null
+          garment_categories: string[] | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          brand_key: string
+          created_at?: string
+          display_name: string
+          domains?: string[] | null
+          fit_tendency?: string | null
+          garment_categories?: string[] | null
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          brand_key?: string
+          created_at?: string
+          display_name?: string
+          domains?: string[] | null
+          fit_tendency?: string | null
+          garment_categories?: string[] | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
+          anchor_brands: Json | null
           created_at: string
           display_name: string | null
           email: string | null
+          fit_preference: string | null
           id: string
           updated_at: string
           user_id: string
         }
         Insert: {
+          anchor_brands?: Json | null
           created_at?: string
           display_name?: string | null
           email?: string | null
+          fit_preference?: string | null
           id?: string
           updated_at?: string
           user_id: string
         }
         Update: {
+          anchor_brands?: Json | null
           created_at?: string
           display_name?: string | null
           email?: string | null
+          fit_preference?: string | null
           id?: string
           updated_at?: string
           user_id?: string
         }
         Relationships: []
+      }
+      recommendations: {
+        Row: {
+          brand_key: string
+          created_at: string
+          explanation_bullets: Json | null
+          id: string
+          product_url: string | null
+          recommended_size: string
+          user_id: string
+        }
+        Insert: {
+          brand_key: string
+          created_at?: string
+          explanation_bullets?: Json | null
+          id?: string
+          product_url?: string | null
+          recommended_size: string
+          user_id: string
+        }
+        Update: {
+          brand_key?: string
+          created_at?: string
+          explanation_bullets?: Json | null
+          id?: string
+          product_url?: string | null
+          recommended_size?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      sizing_charts: {
+        Row: {
+          airtable_record_id: string | null
+          brand_key: string
+          category: string
+          created_at: string
+          fit_notes: string | null
+          id: string
+          measurements: Json | null
+          raw_measurements: Json | null
+          size_label: string
+          synced_at: string | null
+        }
+        Insert: {
+          airtable_record_id?: string | null
+          brand_key: string
+          category: string
+          created_at?: string
+          fit_notes?: string | null
+          id?: string
+          measurements?: Json | null
+          raw_measurements?: Json | null
+          size_label: string
+          synced_at?: string | null
+        }
+        Update: {
+          airtable_record_id?: string | null
+          brand_key?: string
+          category?: string
+          created_at?: string
+          fit_notes?: string | null
+          id?: string
+          measurements?: Json | null
+          raw_measurements?: Json | null
+          size_label?: string
+          synced_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sizing_charts_brand_key_fkey"
+            columns: ["brand_key"]
+            isOneToOne: false
+            referencedRelation: "brand_catalog"
+            referencedColumns: ["brand_key"]
+          },
+        ]
+      }
+      user_adjustments: {
+        Row: {
+          action: string
+          created_at: string
+          final_size: string
+          id: string
+          recommendation_id: string
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          final_size: string
+          id?: string
+          recommendation_id: string
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          final_size?: string
+          id?: string
+          recommendation_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_adjustments_recommendation_id_fkey"
+            columns: ["recommendation_id"]
+            isOneToOne: false
+            referencedRelation: "recommendations"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
