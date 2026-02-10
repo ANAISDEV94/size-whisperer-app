@@ -12,8 +12,13 @@ interface ProfileScreenProps {
   user?: User | null;
 }
 
-// Cache for brand sizes to avoid re-fetching
-const brandSizesCache: Record<string, string[]> = {};
+// Cache for brand sizes - use a mutable ref-like object that can be cleared
+let brandSizesCache: Record<string, string[]> = {};
+
+// Call this to invalidate the cache (e.g., after DB updates)
+export function clearBrandSizesCache() {
+  brandSizesCache = {};
+}
 
 const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
   const [anchors, setAnchors] = useState<AnchorBrand[]>([{ brandKey: "", displayName: "", size: "" }]);

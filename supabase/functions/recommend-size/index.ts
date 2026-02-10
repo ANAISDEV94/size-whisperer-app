@@ -134,6 +134,10 @@ const NUMERIC_TO_LETTER: Record<string, string> = {
 const BRAND_SCALE_MAPS: Record<string, Record<string, number>> = {
   zimmermann: { "0": 1, "1": 2, "2": 4, "3": 6, "4": 8, "5": 10 },
   and_or_collective: { "1": 2, "2": 6, "3": 10 }, // 1=XS/S, 2=M, 3=L/XL
+  // Denim waist sizes → universal index (US numeric equivalent)
+  seven_for_all_mankind: { "22": 0, "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9 },
+  mother: { "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9, "33": 10, "34": 11 },
+  revolve_denim: { "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9 },
 };
 
 // Universal size-to-index mapping for cross-scale comparison
@@ -145,6 +149,8 @@ const UNIVERSAL_SIZE_MAP: Record<string, number> = {
   "XXXS": 0, "XXS": 1, "XS": 2, "S": 3, "M": 4, "L": 6, "XL": 7, "2X": 9, "3X": 10, "4X": 11,
   // EU/IT numeric
   "34": 0, "36": 1, "38": 2, "40": 3, "42": 4, "44": 5, "46": 6, "48": 7,
+  // Denim waist sizes (mapped to universal index)
+  "22": 0, "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9, "33": 10,
 };
 
 function getUniversalIndex(size: string, brandKey?: string): number {
