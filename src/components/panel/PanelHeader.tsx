@@ -1,4 +1,5 @@
-import altaanaLogo from "@/assets/altaana-logo.png";
+import { X } from "lucide-react";
+import altaanaLogo from "@/assets/altaana-modal-logo.png";
 
 interface PanelHeaderProps {
   onClose: () => void;
@@ -6,17 +7,36 @@ interface PanelHeaderProps {
 
 const PanelHeader = ({ onClose }: PanelHeaderProps) => {
   return (
-    <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-      <div className="flex items-center gap-2">
-        <img src={altaanaLogo} alt="ALTAANA Essential" className="h-6 w-auto brightness-0 invert" />
+    <div>
+      {/* Header — logo + close, matching AuthScreen exactly */}
+      <div className="flex items-start justify-between px-7 pt-7 pb-0">
+        <img
+          src={altaanaLogo}
+          alt="ALTAANA Essential"
+          className="w-auto"
+          style={{ height: 48 }}
+        />
+        <button
+          onClick={onClose}
+          className="flex items-center justify-center rounded-full transition-colors hover:opacity-80"
+          style={{
+            width: 36,
+            height: 36,
+            background: "rgba(255, 255, 255, 0.06)",
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+            flexShrink: 0,
+          }}
+          aria-label="Close"
+        >
+          <X className="w-4 h-4" style={{ color: "rgba(255, 255, 255, 0.5)" }} />
+        </button>
       </div>
-      <button
-        onClick={onClose}
-        className="text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
-        aria-label="Close panel"
-      >
-        ✕
-      </button>
+
+      {/* Divider after header */}
+      <div
+        className="mx-7 mt-5"
+        style={{ height: 1, background: "rgba(255, 255, 255, 0.08)" }}
+      />
     </div>
   );
 };
