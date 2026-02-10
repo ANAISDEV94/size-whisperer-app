@@ -127,7 +127,7 @@ const ExtensionPanel = () => {
       </AnimatePresence>
 
       <AnimatePresence>
-        {isOpen && (
+        {isOpen && panelState !== "auth" && (
           <div className="fixed right-4 top-0 bottom-0 z-50 flex items-center">
             <motion.div
               initial={{ x: "100%" }}
