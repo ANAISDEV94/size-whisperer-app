@@ -164,6 +164,80 @@ function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetSc
   return resultSize;
 }
 
+// ── Product page fit scraping ───────────────────────────────────
+
+async function scrapeProductFit(productUrl: string): Promise<string | null> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_API_KEY) return null;
+
+  try {
+    // Fetch page HTML (timeout 8s to keep function fast)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const pageResp = await fetch(productUrl, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; ALTAANA/1.0)" },
+    });
+    clearTimeout(timeout);
+
+    if (!pageResp.ok) return null;
+    const html = await pageResp.text();
+
+    // Extract only the relevant text (strip scripts/styles, take first 12k chars)
+    const stripped = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 12000);
+
+    if (stripped.length < 100) return null;
+
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: "Extract fit and sizing info from this product page text. Return a concise summary (under 50 words) of fit details like: runs small/large, oversized, fitted, true to size, size up/down recommendations, specific measurements mentioned. If no fit info is found, return empty string." },
+          { role: "user", content: stripped },
+        ],
+        tools: [{
+          type: "function",
+          function: {
+            name: "extract_fit",
+            description: "Extract product fit details",
+            parameters: {
+              type: "object",
+              properties: {
+                fit_summary: { type: "string", description: "Concise fit summary or empty string if none found" },
+              },
+              required: ["fit_summary"],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: "function", function: { name: "extract_fit" } },
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (toolCall) {
+      const args = JSON.parse(toolCall.function.arguments);
+      return args.fit_summary || null;
+    }
+    return null;
+  } catch (e) {
+    console.error("Product scrape failed:", e);
+    return null;
+  }
+}
+
 // ── AI bullet generation ────────────────────────────────────────
 
 async function generateBullets(context: {
@@ -173,6 +247,7 @@ async function generateBullets(context: {
   fitPreference: string;
   fitNotes: string | null;
   targetFitTendency: string | null;
+  productFitSummary: string | null;
 }): Promise<string[]> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) {
@@ -188,6 +263,7 @@ Context:
 - Their fit preference: ${context.fitPreference.replace(/_/g, " ")}
 ${context.fitNotes ? `- Brand fit notes: ${context.fitNotes}` : ""}
 ${context.targetFitTendency ? `- ${context.targetBrand} generally ${context.targetFitTendency.replace(/_/g, " ")}` : ""}
+${context.productFitSummary ? `- This specific product: ${context.productFitSummary}` : ""}
 
 Rules:
 - Each bullet must be under 15 words
@@ -260,6 +336,7 @@ function generateFallbackBullets(context: {
   fitPreference: string;
   fitNotes: string | null;
   targetFitTendency: string | null;
+  productFitSummary: string | null;
 }): string[] {
   const anchor = context.anchorBrands[0];
   const bullets = [
@@ -405,7 +482,13 @@ Deno.serve(async (req) => {
       recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale);
     }
 
-    // 5. Generate AI bullets
+    // 5. Scrape product-specific fit info if URL provided
+    let productFitSummary: string | null = null;
+    if (product_url) {
+      productFitSummary = await scrapeProductFit(product_url);
+    }
+
+    // 6. Generate AI bullets
     const bullets = await generateBullets({
       anchorBrands: anchor_brands,
       targetBrand: targetDisplayName,
@@ -413,6 +496,7 @@ Deno.serve(async (req) => {
       fitPreference: fit_preference || "true_to_size",
       fitNotes,
       targetFitTendency,
+      productFitSummary,
     });
 
     // 6. Generate comparisons
@@ -447,6 +531,7 @@ Deno.serve(async (req) => {
         sizeScale: targetSizeScale,
         bullets,
         comparisons,
+        productFitSummary,
         recommendation_id: recommendationId,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
