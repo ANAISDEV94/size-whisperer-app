@@ -2,3 +2,6 @@ project_id = "piqhgmorqhakurjllfof"
 
 [functions.sync-airtable]
 verify_jwt = false
+
+[functions.recommend-size]
+verify_jwt = false

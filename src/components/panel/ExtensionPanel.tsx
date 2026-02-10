@@ -1,7 +1,8 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { PanelState, UserProfile, SizeRecommendation } from "@/types/panel";
 import { useAuth } from "@/hooks/useAuth";
+import { useRecommendation } from "@/hooks/useRecommendation";
 import FloatingWidget from "./FloatingWidget";
 import PanelHeader from "./PanelHeader";
 import AuthScreen from "./screens/AuthScreen";
@@ -10,36 +11,52 @@ import AnalyzingScreen from "./screens/AnalyzingScreen";
 import RecommendationScreen from "./screens/RecommendationScreen";
 import ConfirmedScreen from "./screens/ConfirmedScreen";
 
-// Mock recommendation for demo purposes
-const MOCK_RECOMMENDATION: SizeRecommendation = {
-  size: "Large",
-  brandName: "CSB",
-  bullets: [
-    "You wear Medium in Alo Yoga",
-    "This CSB top runs smaller in the bust",
-    "Most shoppers size up in this item",
-  ],
-  comparisons: [
-    { brandName: "Alo Yoga", size: "Medium", fitTag: "true to size" },
-    { brandName: "CSB", size: "Large", fitTag: "runs small" },
-    { brandName: "Lululemon", size: "Medium", fitTag: "snug fit" },
-  ],
-};
+// ── Read target brand from URL params ───────────────────────────
+function useTargetBrand() {
+  return useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      brandKey: params.get("brand") || "csb",
+      category: params.get("category") || "tops",
+      productUrl: params.get("url") || undefined,
+    };
+  }, []);
+}
+
+// Size offset helpers
+const NUMERIC_ORDER = ["00", "0", "2", "4", "6", "8", "10", "12", "14", "16", "18", "20"];
+const LETTER_ORDER = ["XXXS", "XXS", "XS", "S", "M", "L", "XL", "2X", "3X", "4X"];
+
+function offsetSize(size: string, delta: number): string {
+  const upper = size.toUpperCase().trim();
+  const ni = NUMERIC_ORDER.indexOf(upper);
+  if (ni !== -1) {
+    const next = ni + delta;
+    return NUMERIC_ORDER[Math.max(0, Math.min(next, NUMERIC_ORDER.length - 1))];
+  }
+  const li = LETTER_ORDER.indexOf(upper);
+  if (li !== -1) {
+    const next = li + delta;
+    return LETTER_ORDER[Math.max(0, Math.min(next, LETTER_ORDER.length - 1))];
+  }
+  return size;
+}
 
 const ExtensionPanel = () => {
   const { user, isLoading, signUp, signIn, signInWithGoogle, signOut } = useAuth();
+  const { recommendation, recommendationId, isLoading: recLoading, error: recError, fetchRecommendation, logAdjustment } = useRecommendation();
+  const target = useTargetBrand();
+
   const [isOpen, setIsOpen] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [panelState, setPanelState] = useState<PanelState>("profile");
   const [, setProfile] = useState<UserProfile | null>(null);
-  const [recommendation] = useState<SizeRecommendation>(MOCK_RECOMMENDATION);
+  const [confirmedSize, setConfirmedSize] = useState<string | null>(null);
 
   const handleOpen = useCallback(() => {
     if (!user) {
-      // First-time or logged-out user: show auth
       setShowAuth(true);
     } else {
-      // Returning user: go straight to panel
       setIsOpen(true);
     }
   }, [user]);
@@ -50,7 +67,6 @@ const ExtensionPanel = () => {
   }, []);
 
   const handleAuthComplete = useCallback(() => {
-    // Auth succeeded or user chose to continue without saving
     setShowAuth(false);
     setIsOpen(true);
     setPanelState("profile");
@@ -73,31 +89,58 @@ const ExtensionPanel = () => {
 
   const handleEmailSignUp = useCallback(async (email: string, password: string) => {
     const result = await signUp(email, password);
-    // Don't auto-complete — user needs to verify email first
     return result;
   }, [signUp]);
 
-  const handleProfileSave = useCallback((profile: UserProfile) => {
+  const handleProfileSave = useCallback(async (profile: UserProfile) => {
     setProfile(profile);
     setPanelState("analyzing");
-    setTimeout(() => setPanelState("recommendation"), 2000);
-  }, []);
+
+    await fetchRecommendation(
+      profile,
+      target.brandKey,
+      target.category,
+      user?.id,
+      target.productUrl,
+    );
+
+    setPanelState("recommendation");
+  }, [fetchRecommendation, target, user]);
 
   const handleKeep = useCallback(() => {
+    if (recommendation) {
+      setConfirmedSize(recommendation.size);
+      logAdjustment("keep", recommendation.size);
+    }
     setPanelState("confirmed");
-  }, []);
+  }, [recommendation, logAdjustment]);
 
   const handleSizeDown = useCallback(() => {
+    if (recommendation) {
+      const newSize = offsetSize(recommendation.size, -1);
+      setConfirmedSize(newSize);
+      logAdjustment("size_down", newSize);
+    }
     setPanelState("confirmed");
-  }, []);
+  }, [recommendation, logAdjustment]);
 
   const handleSizeUp = useCallback(() => {
+    if (recommendation) {
+      const newSize = offsetSize(recommendation.size, 1);
+      setConfirmedSize(newSize);
+      logAdjustment("size_up", newSize);
+    }
     setPanelState("confirmed");
-  }, []);
+  }, [recommendation, logAdjustment]);
 
   const handleAddToCart = useCallback(() => {
     console.log("Go to size selector — scroll to size selector");
   }, []);
+
+  // Build confirmed recommendation with adjusted size
+  const confirmedRecommendation: SizeRecommendation | null = recommendation
+    ? { ...recommendation, size: confirmedSize || recommendation.size }
+    : null;
 
   const renderScreen = () => {
     switch (panelState) {
@@ -106,6 +149,19 @@ const ExtensionPanel = () => {
       case "analyzing":
         return <AnalyzingScreen />;
       case "recommendation":
+        if (recError) {
+          return (
+            <div className="flex flex-col flex-1 px-5 py-6 items-center justify-center">
+              <p className="text-sm text-destructive mb-4">Something went wrong generating your recommendation.</p>
+              <button onClick={() => setPanelState("profile")} className="text-xs text-primary underline">
+                Try again
+              </button>
+            </div>
+          );
+        }
+        if (!recommendation) {
+          return <AnalyzingScreen />;
+        }
         return (
           <RecommendationScreen
             recommendation={recommendation}
@@ -115,9 +171,10 @@ const ExtensionPanel = () => {
           />
         );
       case "confirmed":
+        if (!confirmedRecommendation) return null;
         return (
           <ConfirmedScreen
-            recommendation={recommendation}
+            recommendation={confirmedRecommendation}
             onAddToCart={handleAddToCart}
           />
         );
@@ -130,7 +187,6 @@ const ExtensionPanel = () => {
 
   return (
     <>
-      {/* Auth modal */}
       {showAuth && (
         <AuthScreen
           onGoogleSignIn={handleGoogleSignIn}
@@ -141,14 +197,12 @@ const ExtensionPanel = () => {
         />
       )}
 
-      {/* Floating widget — visible when panel and auth are both closed */}
       <AnimatePresence>
         {!isOpen && !showAuth && (
           <FloatingWidget onClick={handleOpen} />
         )}
       </AnimatePresence>
 
-      {/* Slide-in panel */}
       <AnimatePresence>
         {isOpen && (
           <div className="fixed right-4 top-0 bottom-0 z-50 flex items-center">
