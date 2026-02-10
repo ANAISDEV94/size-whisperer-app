@@ -1,9 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { SUPPORTED_BRANDS, ALL_SIZES, type AnchorBrand, type FitPreference, type UserProfile } from "@/types/panel";
+import { SUPPORTED_BRANDS, type AnchorBrand, type FitPreference, type UserProfile } from "@/types/panel";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronDown, Plus, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import type { User } from "@supabase/supabase-js";
@@ -13,10 +12,35 @@ interface ProfileScreenProps {
   user?: User | null;
 }
 
+// Cache for brand sizes to avoid re-fetching
+const brandSizesCache: Record<string, string[]> = {};
+
 const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
   const [anchors, setAnchors] = useState<AnchorBrand[]>([{ brandKey: "", displayName: "", size: "" }]);
   const [fitPreference, setFitPreference] = useState<FitPreference>("true_to_size");
   const [openBrandIndex, setOpenBrandIndex] = useState<number | null>(null);
+  const [openSizeIndex, setOpenSizeIndex] = useState<number | null>(null);
+  const [brandSizes, setBrandSizes] = useState<Record<number, string[]>>({});
+
+  // Fetch available sizes when a brand is selected
+  const fetchSizesForBrand = async (brandDisplayName: string, index: number) => {
+    const brandKey = brandDisplayName.toLowerCase().replace(/[^a-z0-9]/g, "_");
+
+    if (brandSizesCache[brandKey]) {
+      setBrandSizes(prev => ({ ...prev, [index]: brandSizesCache[brandKey] }));
+      return;
+    }
+
+    const { data } = await supabase
+      .from("brand_catalog")
+      .select("available_sizes")
+      .eq("display_name", brandDisplayName)
+      .maybeSingle();
+
+    const sizes = (data?.available_sizes as string[]) || [];
+    brandSizesCache[brandKey] = sizes;
+    setBrandSizes(prev => ({ ...prev, [index]: sizes }));
+  };
 
   const addAnchor = () => {
     if (anchors.length < 2) {
@@ -27,6 +51,11 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
   const removeAnchor = (index: number) => {
     if (anchors.length > 1) {
       setAnchors(anchors.filter((_, i) => i !== index));
+      setBrandSizes(prev => {
+        const updated = { ...prev };
+        delete updated[index];
+        return updated;
+      });
     }
   };
 
@@ -35,6 +64,8 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
     updated[index] = { ...updated[index], [field]: value };
     if (field === "displayName") {
       updated[index].brandKey = value.toLowerCase().replace(/[^a-z0-9]/g, "_");
+      updated[index].size = ""; // Reset size when brand changes
+      fetchSizesForBrand(value, index);
     }
     setAnchors(updated);
   };
@@ -45,7 +76,6 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
     if (!canSave) return;
     const profile: UserProfile = { anchorBrands: anchors, fitPreference };
 
-    // Persist to database for authenticated users
     if (user) {
       await supabase
         .from("profiles")
@@ -86,6 +116,7 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
               )}
             </div>
 
+            {/* Brand searchable popover */}
             <Popover open={openBrandIndex === index} onOpenChange={(open) => setOpenBrandIndex(open ? index : null)}>
               <PopoverTrigger asChild>
                 <button className="w-full flex items-center justify-between rounded-lg border border-border bg-secondary px-3 py-2.5 text-sm text-foreground hover:bg-panel-elevated transition-colors">
@@ -95,7 +126,7 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
                   <ChevronDown className="w-4 h-4 text-muted-foreground" />
                 </button>
               </PopoverTrigger>
-              <PopoverContent className="w-[280px] p-0 bg-card border-border" align="start">
+              <PopoverContent className="w-[280px] p-0 bg-card border-border z-[60]" align="start">
                 <Command className="bg-transparent">
                   <CommandInput placeholder="Search brands..." className="text-sm" />
                   <CommandList>
@@ -120,18 +151,43 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
               </PopoverContent>
             </Popover>
 
-            <Select value={anchor.size} onValueChange={(val) => updateAnchor(index, "size", val)}>
-              <SelectTrigger className="bg-secondary border-border text-sm">
-                <SelectValue placeholder="Select your usual size" />
-              </SelectTrigger>
-              <SelectContent className="bg-card border-border">
-                {ALL_SIZES.map((size) => (
-                  <SelectItem key={size} value={size} className="text-sm">
-                    {size}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* Size searchable popover */}
+            <Popover open={openSizeIndex === index} onOpenChange={(open) => setOpenSizeIndex(open ? index : null)}>
+              <PopoverTrigger asChild>
+                <button
+                  disabled={!anchor.displayName}
+                  className="w-full flex items-center justify-between rounded-lg border border-border bg-secondary px-3 py-2.5 text-sm text-foreground hover:bg-panel-elevated transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className={anchor.size ? "text-foreground" : "text-muted-foreground"}>
+                    {anchor.size || "Select your usual size"}
+                  </span>
+                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-0 bg-card border-border z-[60]" align="start">
+                <Command className="bg-transparent">
+                  <CommandInput placeholder="Search sizes..." className="text-sm" />
+                  <CommandList>
+                    <CommandEmpty>No size found.</CommandEmpty>
+                    <CommandGroup>
+                      {(brandSizes[index] || []).map((size) => (
+                        <CommandItem
+                          key={size}
+                          value={size}
+                          onSelect={() => {
+                            updateAnchor(index, "size", size);
+                            setOpenSizeIndex(null);
+                          }}
+                          className="text-sm cursor-pointer"
+                        >
+                          {size}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
         ))}
       </div>
