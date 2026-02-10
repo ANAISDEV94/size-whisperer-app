@@ -107,7 +107,6 @@ const ExtensionPanel = () => {
         <AuthScreen
           onGoogleSignIn={handleAuth}
           onEmailSignIn={handleAuth}
-          onSignUp={handleAuth}
           onContinueWithout={handleAuth}
           onClose={() => setPanelState("auth")}
         />
