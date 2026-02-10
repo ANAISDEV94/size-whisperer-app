@@ -1,8 +1,9 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { PanelState, UserProfile, SizeRecommendation } from "@/types/panel";
 import { useAuth } from "@/hooks/useAuth";
 import { useRecommendation } from "@/hooks/useRecommendation";
+import { useConfirmationMemory } from "@/hooks/useConfirmationMemory";
 import FloatingWidget from "./FloatingWidget";
 import PanelHeader from "./PanelHeader";
 import AuthScreen from "./screens/AuthScreen";
@@ -42,12 +43,13 @@ const ExtensionPanel = () => {
   const { user, isLoading, signUp, signIn, signInWithGoogle, signOut } = useAuth();
   const { recommendation, recommendationId, isLoading: recLoading, error: recError, fetchRecommendation, logAdjustment } = useRecommendation();
   const target = useTargetBrand();
+  const { cached, save: saveConfirmation } = useConfirmationMemory(target.brandKey, target.productUrl);
 
   const [isOpen, setIsOpen] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
-  const [panelState, setPanelState] = useState<PanelState>("profile");
+  const [panelState, setPanelState] = useState<PanelState>(cached ? "confirmed" : "profile");
   const [, setProfile] = useState<UserProfile | null>(null);
-  const [confirmedSize, setConfirmedSize] = useState<string | null>(null);
+  const [confirmedSize, setConfirmedSize] = useState<string | null>(cached?.size || null);
 
   const handleOpen = useCallback(() => {
     if (!user) {
@@ -107,36 +109,42 @@ const ExtensionPanel = () => {
     if (recommendation) {
       setConfirmedSize(recommendation.size);
       logAdjustment("keep", recommendation.size);
+      saveConfirmation(recommendation.size, recommendation);
     }
     setPanelState("confirmed");
-  }, [recommendation, logAdjustment]);
+  }, [recommendation, logAdjustment, saveConfirmation]);
 
   const handleSizeDown = useCallback(() => {
     if (recommendation) {
       const newSize = offsetSize(recommendation.size, -1, recommendation.sizeScale);
       setConfirmedSize(newSize);
       logAdjustment("size_down", newSize);
+      saveConfirmation(newSize, recommendation);
     }
     setPanelState("confirmed");
-  }, [recommendation, logAdjustment]);
+  }, [recommendation, logAdjustment, saveConfirmation]);
 
   const handleSizeUp = useCallback(() => {
     if (recommendation) {
       const newSize = offsetSize(recommendation.size, 1, recommendation.sizeScale);
       setConfirmedSize(newSize);
       logAdjustment("size_up", newSize);
+      saveConfirmation(newSize, recommendation);
     }
     setPanelState("confirmed");
-  }, [recommendation, logAdjustment]);
+  }, [recommendation, logAdjustment, saveConfirmation]);
 
   const handleAddToCart = useCallback(() => {
     console.log("Go to size selector — scroll to size selector");
   }, []);
 
   // Build confirmed recommendation with adjusted size
-  const confirmedRecommendation: SizeRecommendation | null = recommendation
-    ? { ...recommendation, size: confirmedSize || recommendation.size }
-    : null;
+  const confirmedRecommendation: SizeRecommendation | null =
+    recommendation
+      ? { ...recommendation, size: confirmedSize || recommendation.size }
+      : cached
+        ? { ...cached.recommendation, size: confirmedSize || cached.size }
+        : null;
 
   const renderScreen = () => {
     switch (panelState) {
