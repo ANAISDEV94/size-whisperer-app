@@ -18,7 +18,7 @@ const ConfirmedScreen = ({ recommendation, onAddToCart }: ConfirmedScreenProps) 
         <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-3">
           <Check className="w-5 h-5 text-primary" />
         </div>
-        <h2 className="font-serif-display text-lg font-medium text-foreground mb-1">
+        <h2 className="font-serif-display text-lg text-foreground mb-1">
           Size confirmed
         </h2>
         <p className="text-xs text-muted-foreground">
@@ -30,14 +30,15 @@ const ConfirmedScreen = ({ recommendation, onAddToCart }: ConfirmedScreenProps) 
         <p className="text-[10px] uppercase tracking-[0.2em] text-primary mb-1">
           Your size for this item
         </p>
-        <p className="font-serif-display text-2xl font-semibold text-foreground">
+        <p className="font-serif-display text-2xl text-foreground">
           {recommendation.size}
         </p>
       </div>
 
       <Button
         onClick={onAddToCart}
-        className="w-full bg-primary text-primary-foreground hover:bg-primary/90 rounded-full h-11 text-sm font-medium mb-6"
+        className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-full text-sm mb-6 mx-auto"
+        style={{ height: 48.5, width: 334 }}
       >
         Add to cart with my size
       </Button>
@@ -86,7 +87,7 @@ const ConfirmedScreen = ({ recommendation, onAddToCart }: ConfirmedScreenProps) 
           {recommendation.comparisons.map((comp, i) => (
             <div key={i} className="flex items-center justify-between py-2 px-3 rounded-lg bg-secondary">
               <div>
-                <p className="text-xs font-medium text-foreground">{comp.brandName}</p>
+                <p className="text-xs text-foreground">{comp.brandName}</p>
                 <p className="text-[10px] text-muted-foreground">{comp.size}</p>
               </div>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-panel-elevated text-secondary-foreground">

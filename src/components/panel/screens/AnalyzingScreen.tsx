@@ -11,7 +11,7 @@ const AnalyzingScreen = () => {
       >
         <Loader2 className="w-10 h-10 text-primary" />
       </motion.div>
-      <h2 className="font-serif-display text-lg font-medium text-foreground mb-2">
+      <h2 className="font-serif-display text-lg text-foreground mb-2">
         Analyzing fit…
       </h2>
       <p className="text-xs text-muted-foreground text-center">

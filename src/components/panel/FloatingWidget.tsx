@@ -57,7 +57,7 @@ const FloatingWidget = ({ onClick, confirmedSize, confirmedBrand }: FloatingWidg
         style={{
           color: "#00CED1",
           fontSize: 11,
-          fontWeight: 500,
+          fontWeight: 400,
           letterSpacing: "0.08em",
           textTransform: "uppercase" as const,
           paddingRight: isConfirmed ? 24 : 28,

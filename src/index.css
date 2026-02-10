@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+
 
 @tailwind base;
 @tailwind components;
@@ -60,10 +60,11 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: 'Inter', sans-serif;
+    font-family: Optima, 'Lucida Grande', sans-serif;
+    font-weight: 400;
   }
 }
 
 .font-serif-display {
-  font-family: 'Playfair Display', serif;
+  font-family: Optima, 'Lucida Grande', sans-serif;
 }

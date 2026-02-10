@@ -129,7 +129,15 @@ const ExtensionPanel = () => {
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", damping: 30, stiffness: 300 }}
-            className="fixed right-0 top-0 h-full w-[340px] z-50 bg-background border-l border-border flex flex-col shadow-2xl"
+            className="fixed right-4 top-1/2 -translate-y-1/2 z-50 flex flex-col overflow-hidden"
+            style={{
+              width: 404,
+              height: 733,
+              borderRadius: 20,
+              background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",
+              border: "1px solid rgba(0, 206, 209, 0.18)",
+              boxShadow: "0 0 60px rgba(0, 206, 209, 0.08), -8px 0 40px rgba(0, 0, 0, 0.5)",
+            }}
           >
             <PanelHeader onClose={handleClose} />
             {renderScreen()}

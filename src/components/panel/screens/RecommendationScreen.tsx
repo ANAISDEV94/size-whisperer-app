@@ -19,7 +19,7 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp }: 
         <p className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-2">
           Your recommended size
         </p>
-        <h2 className="font-serif-display text-3xl font-semibold text-foreground">
+        <h2 className="font-serif-display text-3xl text-foreground">
           {recommendation.size}
         </h2>
         <p className="text-xs text-muted-foreground mt-1">
@@ -53,20 +53,23 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp }: 
         <Button
           onClick={onSizeDown}
           variant="outline"
-          className="flex-1 rounded-full border-border text-foreground text-xs h-10"
+          className="flex-1 rounded-full border-border text-foreground text-xs"
+          style={{ height: 48.5 }}
         >
           Size down
         </Button>
         <Button
           onClick={onKeep}
-          className="flex-[2] rounded-full bg-primary text-primary-foreground text-xs h-10 font-medium"
+          className="flex-[2] rounded-full bg-primary text-primary-foreground text-xs"
+          style={{ height: 48.5 }}
         >
           Keep
         </Button>
         <Button
           onClick={onSizeUp}
           variant="outline"
-          className="flex-1 rounded-full border-border text-foreground text-xs h-10"
+          className="flex-1 rounded-full border-border text-foreground text-xs"
+          style={{ height: 48.5 }}
         >
           Size up
         </Button>
