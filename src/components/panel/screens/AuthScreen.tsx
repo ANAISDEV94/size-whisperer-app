@@ -133,22 +133,6 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose 
             Continue without saving
           </button>
 
-          {/* Tertiary — Continue without */}
-          <button
-            onClick={onContinueWithout}
-            className="mt-7 cursor-pointer transition-opacity hover:opacity-80 self-center"
-            style={{
-              background: "none",
-              border: "none",
-              fontSize: 14,
-              color: "rgba(255, 255, 255, 0.4)",
-              textDecoration: "underline",
-              textUnderlineOffset: 4,
-            }}
-          >
-            Continue without saving
-          </button>
-
           {/* Divider */}
           <div
             className="mt-8"
