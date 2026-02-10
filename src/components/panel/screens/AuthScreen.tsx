@@ -29,7 +29,7 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose 
           <img
             src={altaanaLogo}
             alt="ALTAANA Essential"
-            className="h-10 w-auto"
+            className="h-16 w-auto"
             style={{ filter: "brightness(0) invert(1)" }}
           />
           <button
