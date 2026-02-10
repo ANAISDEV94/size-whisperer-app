@@ -52,7 +52,7 @@ const ProfileScreen = ({ onSave }: ProfileScreenProps) => {
 
   return (
     <div className="flex flex-col flex-1 px-5 py-6 overflow-y-auto">
-      <h2 className="font-serif-display text-lg font-medium text-foreground mb-1">
+      <h2 className="font-serif-display text-lg text-foreground mb-1">
         Your sizing profile
       </h2>
       <p className="text-xs text-primary mb-6">Takes about 60 seconds</p>
@@ -140,7 +140,7 @@ const ProfileScreen = ({ onSave }: ProfileScreenProps) => {
             <button
               key={opt.value}
               onClick={() => setFitPreference(opt.value)}
-              className={`flex-1 py-2 px-3 rounded-full text-xs font-medium transition-all ${
+              className={`flex-1 py-2 px-3 rounded-full text-xs transition-all ${
                 fitPreference === opt.value
                   ? "bg-primary text-primary-foreground"
                   : "bg-secondary text-secondary-foreground hover:bg-panel-elevated"
@@ -155,7 +155,8 @@ const ProfileScreen = ({ onSave }: ProfileScreenProps) => {
       <Button
         onClick={handleSave}
         disabled={!canSave}
-        className="w-full bg-primary text-primary-foreground hover:bg-primary/90 rounded-full h-11 text-sm font-medium mt-auto"
+        className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-full text-sm mt-auto mx-auto"
+        style={{ height: 48.5, width: 334 }}
       >
         Save my profile
       </Button>

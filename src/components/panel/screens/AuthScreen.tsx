@@ -22,7 +22,7 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose 
           height: 733,
           flexShrink: 0,
           borderRadius: 20,
-          background: "linear-gradient(180deg, #151213 0%, #0a0809 40%, #070506 100%)",
+          background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",
           border: "1px solid rgba(0, 206, 209, 0.18)",
           boxShadow: "0 0 60px rgba(0, 206, 209, 0.08), -8px 0 40px rgba(0, 0, 0, 0.5)",
           overflow: "hidden",
@@ -79,13 +79,14 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose 
           {/* Primary CTA — Google */}
           <button
             onClick={onGoogleSignIn}
-            className="w-full flex items-center justify-center gap-3 rounded-full cursor-pointer transition-opacity hover:opacity-90 mt-10"
+            className="flex items-center justify-center gap-3 rounded-full cursor-pointer transition-opacity hover:opacity-90 mt-10 mx-auto"
             style={{
-              height: 56,
+              height: 48.5,
+              width: 334,
               background: "#00CED1",
               border: "none",
               fontSize: 16,
-              fontWeight: 500,
+              fontWeight: 400,
               color: "#070506",
             }}
           >
@@ -101,13 +102,14 @@ const AuthScreen = ({ onGoogleSignIn, onEmailSignIn, onContinueWithout, onClose 
           {/* Secondary CTA — Email */}
           <button
             onClick={onEmailSignIn}
-            className="w-full flex items-center justify-center gap-3 rounded-full cursor-pointer mt-3.5 transition-opacity hover:opacity-80"
+            className="flex items-center justify-center gap-3 rounded-full cursor-pointer mt-3.5 transition-opacity hover:opacity-80 mx-auto"
             style={{
-              height: 56,
+              height: 48.5,
+              width: 334,
               background: "transparent",
               border: "1px solid rgba(255, 255, 255, 0.15)",
               fontSize: 16,
-              fontWeight: 500,
+              fontWeight: 400,
               color: "rgba(255, 255, 255, 0.8)",
             }}
           >
