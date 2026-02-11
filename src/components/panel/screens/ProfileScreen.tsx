@@ -7,13 +7,60 @@ import { ChevronDown, Plus, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import type { User } from "@supabase/supabase-js";
 
+// ── Size grouping helpers ──────────────────────────────────────
+const LETTER_PATTERN = /^(XXXS|XXS|XS|S|M|L|XL|XXL|2X|3X|4X)$/i;
+const EU_SIZES = new Set(["34","36","38","40","42","44","46","48"]);
+const DENIM_RANGE = { min: 22, max: 35 };
+
+type SizeGroup = { label: string; sizes: string[] };
+
+function classifySizes(sizes: string[], sizeScale: string): SizeGroup[] {
+  if (sizeScale !== "mixed") {
+    return [{ label: "", sizes }];
+  }
+
+  const letters: string[] = [];
+  const eu: string[] = [];
+  const denim: string[] = [];
+  const numeric: string[] = [];
+  const brandSpecific: string[] = [];
+
+  for (const s of sizes) {
+    if (LETTER_PATTERN.test(s)) {
+      letters.push(s);
+    } else if (EU_SIZES.has(s)) {
+      eu.push(s);
+    } else {
+      const n = parseInt(s, 10);
+      if (!isNaN(n)) {
+        if (n >= DENIM_RANGE.min && n <= DENIM_RANGE.max && s.length === 2) {
+          // Could be denim waist or EU — check if EU set already has it
+          denim.push(s);
+        } else if (n <= 5 && s.length === 1) {
+          brandSpecific.push(s);
+        } else {
+          numeric.push(s);
+        }
+      }
+    }
+  }
+
+  const groups: SizeGroup[] = [];
+  if (letters.length) groups.push({ label: "Letter", sizes: letters });
+  if (numeric.length) groups.push({ label: "US", sizes: numeric });
+  if (eu.length) groups.push({ label: "EU", sizes: eu });
+  if (denim.length) groups.push({ label: "Denim", sizes: denim });
+  if (brandSpecific.length) groups.push({ label: "Brand", sizes: brandSpecific });
+  return groups.length ? groups : [{ label: "", sizes }];
+}
+
 interface ProfileScreenProps {
   onSave: (profile: UserProfile) => void;
   user?: User | null;
 }
 
 // Cache for brand sizes - use a mutable ref-like object that can be cleared
-let brandSizesCache: Record<string, string[]> = {};
+let brandSizesCache: Record<string, { sizes: string[]; sizeScale: string }> = {};
 
 // Call this to invalidate the cache (e.g., after DB updates)
 export function clearBrandSizesCache() {
@@ -25,7 +72,7 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
   const [fitPreference, setFitPreference] = useState<FitPreference>("true_to_size");
   const [openBrandIndex, setOpenBrandIndex] = useState<number | null>(null);
   const [openSizeIndex, setOpenSizeIndex] = useState<number | null>(null);
-  const [brandSizes, setBrandSizes] = useState<Record<number, string[]>>({});
+  const [brandSizes, setBrandSizes] = useState<Record<number, { sizes: string[]; sizeScale: string }>>({});
 
   // Fetch available sizes when a brand is selected
   const fetchSizesForBrand = async (brandDisplayName: string, index: number) => {
@@ -38,13 +85,16 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
 
     const { data } = await supabase
       .from("brand_catalog")
-      .select("available_sizes")
+      .select("available_sizes, size_scale")
       .eq("display_name", brandDisplayName)
       .maybeSingle();
 
-    const sizes = (data?.available_sizes as string[]) || [];
-    brandSizesCache[brandKey] = sizes;
-    setBrandSizes(prev => ({ ...prev, [index]: sizes }));
+    const entry = {
+      sizes: (data?.available_sizes as string[]) || [],
+      sizeScale: (data?.size_scale as string) || "letter",
+    };
+    brandSizesCache[brandKey] = entry;
+    setBrandSizes(prev => ({ ...prev, [index]: entry }));
   };
 
   const addAnchor = () => {
@@ -174,21 +224,28 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
                   <CommandInput placeholder="Search sizes..." className="text-sm" />
                   <CommandList>
                     <CommandEmpty>No size found.</CommandEmpty>
-                    <CommandGroup>
-                      {(brandSizes[index] || []).map((size) => (
-                        <CommandItem
-                          key={size}
-                          value={size}
-                          onSelect={() => {
-                            updateAnchor(index, "size", size);
-                            setOpenSizeIndex(null);
-                          }}
-                          className="text-sm cursor-pointer"
-                        >
-                          {size}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
+                    {(() => {
+                      const entry = brandSizes[index];
+                      if (!entry) return null;
+                      const groups = classifySizes(entry.sizes, entry.sizeScale);
+                      return groups.map((group) => (
+                        <CommandGroup key={group.label} heading={group.label || undefined}>
+                          {group.sizes.map((size) => (
+                            <CommandItem
+                              key={`${group.label}-${size}`}
+                              value={`${group.label} ${size}`}
+                              onSelect={() => {
+                                updateAnchor(index, "size", size);
+                                setOpenSizeIndex(null);
+                              }}
+                              className="text-sm cursor-pointer"
+                            >
+                              {size}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      ));
+                    })()}
                   </CommandList>
                 </Command>
               </PopoverContent>
