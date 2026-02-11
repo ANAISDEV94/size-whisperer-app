@@ -10,12 +10,17 @@ import type { User } from "@supabase/supabase-js";
 // ── Size grouping helpers ──────────────────────────────────────
 const LETTER_PATTERN = /^(XXXS|XXS|XS|S|M|L|XL|XXL|2X|3X|4X)$/i;
 const EU_SIZES = new Set(["34","36","38","40","42","44","46","48"]);
+const UK_SIZES = new Set(["4","6","8","10","12","14","16","18","20"]);
 const DENIM_RANGE = { min: 22, max: 35 };
 
 type SizeGroup = { label: string; sizes: string[] };
 
 function classifySizes(sizes: string[], sizeScale: string): SizeGroup[] {
   if (sizeScale !== "mixed") {
+    // For non-mixed scales, detect UK specifically
+    if (sizeScale === "uk") {
+      return [{ label: "UK", sizes }];
+    }
     return [{ label: "", sizes }];
   }
 
@@ -24,6 +29,11 @@ function classifySizes(sizes: string[], sizeScale: string): SizeGroup[] {
   const inDenimRange = allNums.filter(n => n >= DENIM_RANGE.min && n <= DENIM_RANGE.max);
   const hasOddInDenimRange = inDenimRange.some(n => n % 2 !== 0);
   const denimSet = hasOddInDenimRange ? new Set(inDenimRange.map(String)) : new Set<string>();
+
+  // Detect if numeric sizes are UK (even numbers 4-20 with no 0/2)
+  const nonLetterNonEU = sizes.filter(s => !LETTER_PATTERN.test(s) && !EU_SIZES.has(s) && !denimSet.has(s));
+  const smallNums = nonLetterNonEU.map(s => parseInt(s, 10)).filter(n => !isNaN(n) && n <= 20);
+  const isUK = smallNums.length > 0 && smallNums.every(n => UK_SIZES.has(String(n))) && !smallNums.some(n => n === 0 || n === 2);
 
   const letters: string[] = [];
   const eu: string[] = [];
@@ -46,25 +56,26 @@ function classifySizes(sizes: string[], sizeScale: string): SizeGroup[] {
   // Second pass: classify remaining numbers
   const hasEU = eu.length > 0;
   const numeric: string[] = [];
-  const brandSpecific: string[] = [];
+  const euBrandSpecific: string[] = [];
 
   for (const s of remaining) {
     const n = parseInt(s, 10);
     if (isNaN(n)) continue;
 
     if (hasEU && n >= 1 && n <= 5 && s.length === 1) {
-      brandSpecific.push(s);
+      euBrandSpecific.push(s);
     } else {
       numeric.push(s);
     }
   }
 
+  const numericLabel = isUK ? "UK" : "US";
   const groups: SizeGroup[] = [];
   if (letters.length) groups.push({ label: "Letter", sizes: letters });
-  if (numeric.length) groups.push({ label: "US", sizes: numeric });
+  if (numeric.length) groups.push({ label: numericLabel, sizes: numeric });
   if (eu.length) groups.push({ label: "EU", sizes: eu });
   if (denim.length) groups.push({ label: "Denim", sizes: denim });
-  if (brandSpecific.length) groups.push({ label: "Brand", sizes: brandSpecific });
+  if (euBrandSpecific.length) groups.push({ label: "EU", sizes: euBrandSpecific });
   return groups.length ? groups : [{ label: "", sizes }];
 }
 
