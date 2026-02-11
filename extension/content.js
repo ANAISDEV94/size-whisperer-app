@@ -76,6 +76,33 @@ const CATEGORY_KEYWORDS = {
   activewear: ["sports-bra", "workout", "active", "yoga"],
 };
 
+function detectBrandFromDOM() {
+  // Try to find brand name from common PDP elements on Revolve
+  // Revolve shows brand name in a specific element near the product title
+  const selectors = [
+    // Revolve brand link near product title
+    '.product-brand a',
+    '.brand-name a',
+    '[data-comp="ProductBrand"] a',
+    'a[href*="/br/"]',
+    // Generic brand selectors
+    '.product-brand',
+    '.brand-name',
+    '[itemprop="brand"]',
+    'meta[itemprop="brand"]',
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      const text = (el.textContent || el.getAttribute("content") || "").trim();
+      if (text && text.length > 1 && text.length < 60) {
+        return text;
+      }
+    }
+  }
+  return null;
+}
+
 function detectBrand() {
   const hostname = location.hostname.replace(/^www\./, "");
 
@@ -91,21 +118,39 @@ function detectBrand() {
     }
   }
 
-  // Revolve: detect brand from URL path
+  // Revolve: detect brand from URL path or DOM
   if (hostname.includes("revolve.com")) {
     const path = location.pathname.toLowerCase();
+    // Check known brand paths first
     for (const [prefix, brandKey] of Object.entries(REVOLVE_PATH_BRANDS)) {
       if (path.includes(prefix)) return brandKey;
     }
-    // Try to extract brand from Revolve URL structure: /r/dp.jsp?...&d=Womens&page=/norma-kamali/...
-    // or from path like /norma-kamali/x-revolve-...
+
+    // Try scraping brand name from the page DOM
+    const domBrand = detectBrandFromDOM();
+    if (domBrand) {
+      // Convert display name to slug: "Norma Kamali" → "norma_kamali"
+      const slug = domBrand.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+      console.log(`[Altaana] Revolve brand from DOM: "${domBrand}" → ${slug}`);
+      // Skip generic words that aren't brand names
+      const skipWords = ["new", "sale", "clothing", "dresses", "tops", "bottoms", "shoes", "accessories", "designers", "beauty", "womens", "mens"];
+      if (!skipWords.includes(slug)) {
+        return slug;
+      }
+    }
+
+    // Try URL path as last resort, but skip common non-brand segments
     const brandMatch = path.match(/^\/([a-z0-9-]+)\//);
     if (brandMatch) {
-      const slug = brandMatch[1].replace(/-/g, "_");
-      console.log(`[Altaana] Revolve brand slug detected: ${slug}`);
-      return slug;
+      const segment = brandMatch[1];
+      const skipSegments = ["new", "r", "sale", "clothing", "dresses", "dp", "shop", "category", "womens", "mens"];
+      if (!skipSegments.includes(segment)) {
+        const slug = segment.replace(/-/g, "_");
+        console.log(`[Altaana] Revolve brand slug detected: ${slug}`);
+        return slug;
+      }
     }
-    return null; // Don't default to CSB — skip if unknown
+    return null;
   }
 
   return null;
@@ -159,6 +204,60 @@ function injectPanel(brandKey) {
   document.body.appendChild(iframe);
   console.log(`[Altaana] Injected panel for brand="${brandKey}" category="${category}"`);
 }
+
+// ── Listen for messages from the panel iframe ────────────────────
+window.addEventListener("message", (event) => {
+  if (event.origin !== PANEL_ORIGIN) return;
+
+  if (event.data?.type === "ALTAANA_SCROLL_TO_SIZE") {
+    // Find the size selector on the host page and scroll to it
+    const sizeSelectors = [
+      // Common size selector elements across e-commerce sites
+      '[class*="size-selector"]',
+      '[class*="sizeSelector"]',
+      '[class*="size-picker"]',
+      '[class*="sizePicker"]',
+      '[class*="size-buttons"]',
+      '[data-testid*="size"]',
+      '[aria-label*="size" i]',
+      '[aria-label*="Size" i]',
+      'fieldset:has(legend)',
+      // Revolve specific
+      '#sizeSelect',
+      '.sizes-list',
+      '.product-sizes',
+      // Generic patterns
+      'select[name*="size" i]',
+      'div:has(> button:nth-child(3))', // grid of size buttons
+    ];
+
+    // Also try finding by text content "Size:" label
+    const labels = document.querySelectorAll("label, span, p, div, h3, h4");
+    for (const label of labels) {
+      if (/^size:?\s*$/i.test(label.textContent?.trim() || "")) {
+        label.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Flash highlight
+        label.style.outline = "2px solid #00CED1";
+        setTimeout(() => { label.style.outline = ""; }, 2000);
+        console.log("[Altaana] Scrolled to size label");
+        return;
+      }
+    }
+
+    for (const sel of sizeSelectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.style.outline = "2px solid #00CED1";
+        setTimeout(() => { el.style.outline = ""; }, 2000);
+        console.log(`[Altaana] Scrolled to size selector: ${sel}`);
+        return;
+      }
+    }
+
+    console.log("[Altaana] No size selector found on page");
+  }
+});
 
 // ── Main ──────────────────────────────────────────────────────────
 (function main() {

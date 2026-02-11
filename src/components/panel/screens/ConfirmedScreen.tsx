@@ -36,7 +36,11 @@ const ConfirmedScreen = ({ recommendation, onAddToCart }: ConfirmedScreenProps) 
       </div>
 
       <Button
-        onClick={onAddToCart}
+        onClick={() => {
+          // Tell the host page (via content script) to scroll to the size selector
+          window.parent.postMessage({ type: "ALTAANA_SCROLL_TO_SIZE" }, "*");
+          onAddToCart();
+        }}
         className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-full text-sm mb-6 mx-auto"
         style={{ height: 48.5, width: 334 }}
       >

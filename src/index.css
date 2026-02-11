@@ -1,8 +1,9 @@
 /* When embedded in iframe, make everything transparent */
 html.embedded,
-body.embedded,
-body.embedded #root {
+html.embedded body,
+html.embedded body #root {
   background: transparent !important;
+  background-color: transparent !important;
   min-height: 0 !important;
 }
 
@@ -65,9 +66,13 @@ body.embedded #root {
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
     font-family: Optima, 'Lucida Grande', sans-serif;
     font-weight: 400;
+  }
+
+  body:not(.embedded) {
+    @apply bg-background;
   }
 }
 
