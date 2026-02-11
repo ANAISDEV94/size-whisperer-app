@@ -1,4 +1,7 @@
-
+/* When embedded in iframe, make body transparent */
+body.embedded {
+  background: transparent !important;
+}
 
 @tailwind base;
 @tailwind components;
