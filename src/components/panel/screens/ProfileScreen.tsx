@@ -21,27 +21,42 @@ function classifySizes(sizes: string[], sizeScale: string): SizeGroup[] {
 
   const letters: string[] = [];
   const eu: string[] = [];
-  const denim: string[] = [];
-  const numeric: string[] = [];
-  const brandSpecific: string[] = [];
+  const remaining: string[] = [];
 
+  // First pass: extract letters and EU sizes
   for (const s of sizes) {
     if (LETTER_PATTERN.test(s)) {
       letters.push(s);
     } else if (EU_SIZES.has(s)) {
       eu.push(s);
     } else {
-      const n = parseInt(s, 10);
-      if (!isNaN(n)) {
-        if (n >= DENIM_RANGE.min && n <= DENIM_RANGE.max && s.length === 2) {
-          // Could be denim waist or EU — check if EU set already has it
-          denim.push(s);
-        } else if (n <= 5 && s.length === 1) {
-          brandSpecific.push(s);
-        } else {
-          numeric.push(s);
-        }
-      }
+      remaining.push(s);
+    }
+  }
+
+  // Second pass: classify remaining numbers using context
+  const hasEU = eu.length > 0;
+  const hasOddInDenimRange = remaining.some(r => {
+    const rn = parseInt(r, 10);
+    return rn >= DENIM_RANGE.min && rn <= DENIM_RANGE.max && rn % 2 !== 0;
+  });
+
+  const numeric: string[] = [];
+  const denim: string[] = [];
+  const brandSpecific: string[] = [];
+
+  for (const s of remaining) {
+    const n = parseInt(s, 10);
+    if (isNaN(n)) continue;
+
+    if (n >= DENIM_RANGE.min && n <= DENIM_RANGE.max && hasOddInDenimRange) {
+      // Odd numbers in 22-35 range confirm this group is denim waist sizes
+      denim.push(s);
+    } else if (hasEU && n >= 1 && n <= 5 && s.length === 1) {
+      // Brand-specific (e.g. Versace 1-5, D&G 1-5) only when EU sizes coexist
+      brandSpecific.push(s);
+    } else {
+      numeric.push(s);
     }
   }
 
