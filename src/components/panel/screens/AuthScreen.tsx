@@ -92,8 +92,8 @@ const AuthScreen = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-end">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+    <div className="fixed inset-0 z-50 flex items-center justify-end" style={{ background: 'transparent' }}>
+      {/* No backdrop overlay — the iframe must be fully transparent behind the panel */}
 
       <div
         className="relative z-10 flex flex-col my-auto mr-4 overflow-y-auto"

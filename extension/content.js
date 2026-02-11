@@ -77,26 +77,43 @@ const CATEGORY_KEYWORDS = {
 };
 
 function detectBrandFromDOM() {
-  // Try to find brand name from common PDP elements on Revolve
-  // Revolve shows brand name in a specific element near the product title
-  const selectors = [
-    // Revolve brand link near product title
-    '.product-brand a',
-    '.brand-name a',
-    '[data-comp="ProductBrand"] a',
-    'a[href*="/br/"]',
-    // Generic brand selectors
-    '.product-brand',
-    '.brand-name',
-    '[itemprop="brand"]',
+  // Revolve PDP: brand name is in a specific element above the product title
+  // Target only PDP-specific selectors, NOT navigation elements
+  const pdpSelectors = [
+    // Revolve PDP brand selectors (very specific to product detail pages)
+    '.product-details .brand-name a',
+    '.product-details .product-brand a',
+    '.pdp-brand a',
+    '.product-brand__link',
+    // Revolve uses a specific designer link pattern on PDP
+    '.product-details a[href*="/r/br/"]',
+    '.product-name a[href*="/br/"]',
+    // Schema.org markup (very reliable when present)
+    '[itemprop="brand"] [itemprop="name"]',
     'meta[itemprop="brand"]',
+    '[itemprop="brand"]',
+    // Generic PDP brand selectors (only inside product detail containers)
+    '.product-detail .brand-name',
+    '.product-info .brand-name',
+    '.pdp-header .brand-name',
   ];
-  for (const sel of selectors) {
+
+  const skipWords = [
+    "new", "sale", "clothing", "dresses", "tops", "bottoms", "shoes",
+    "accessories", "designers", "beauty", "womens", "mens", "what_s_new",
+    "best_sellers", "shop", "home", "view_all", "collections", "brands",
+    "trending", "just_in", "category",
+  ];
+
+  for (const sel of pdpSelectors) {
     const el = document.querySelector(sel);
     if (el) {
       const text = (el.textContent || el.getAttribute("content") || "").trim();
       if (text && text.length > 1 && text.length < 60) {
-        return text;
+        const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+        if (!skipWords.includes(slug)) {
+          return text;
+        }
       }
     }
   }
@@ -198,8 +215,15 @@ function injectPanel(brandKey) {
     border: none;
     z-index: 2147483647;
     background: transparent;
-    pointer-events: auto;
+    pointer-events: none;
   `;
+
+  // Allow pointer events only on the panel content inside the iframe
+  // The iframe listens for mouse events and toggles pointer-events
+  iframe.addEventListener("load", () => {
+    // Send a message to the iframe to set up pointer-events passthrough
+    iframe.contentWindow?.postMessage({ type: "ALTAANA_INIT_POINTER_EVENTS" }, PANEL_ORIGIN);
+  });
 
   document.body.appendChild(iframe);
   console.log(`[Altaana] Injected panel for brand="${brandKey}" category="${category}"`);
@@ -210,53 +234,135 @@ window.addEventListener("message", (event) => {
   if (event.origin !== PANEL_ORIGIN) return;
 
   if (event.data?.type === "ALTAANA_SCROLL_TO_SIZE") {
-    // Find the size selector on the host page and scroll to it
-    const sizeSelectors = [
-      // Common size selector elements across e-commerce sites
-      '[class*="size-selector"]',
-      '[class*="sizeSelector"]',
-      '[class*="size-picker"]',
-      '[class*="sizePicker"]',
-      '[class*="size-buttons"]',
-      '[data-testid*="size"]',
-      '[aria-label*="size" i]',
-      '[aria-label*="Size" i]',
-      'fieldset:has(legend)',
-      // Revolve specific
-      '#sizeSelect',
-      '.sizes-list',
-      '.product-sizes',
-      // Generic patterns
-      'select[name*="size" i]',
-      'div:has(> button:nth-child(3))', // grid of size buttons
-    ];
-
-    // Also try finding by text content "Size:" label
-    const labels = document.querySelectorAll("label, span, p, div, h3, h4");
-    for (const label of labels) {
-      if (/^size:?\s*$/i.test(label.textContent?.trim() || "")) {
-        label.scrollIntoView({ behavior: "smooth", block: "center" });
-        // Flash highlight
-        label.style.outline = "2px solid #00CED1";
-        setTimeout(() => { label.style.outline = ""; }, 2000);
-        console.log("[Altaana] Scrolled to size label");
-        return;
-      }
-    }
-
-    for (const sel of sizeSelectors) {
-      const el = document.querySelector(sel);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.style.outline = "2px solid #00CED1";
-        setTimeout(() => { el.style.outline = ""; }, 2000);
-        console.log(`[Altaana] Scrolled to size selector: ${sel}`);
-        return;
-      }
-    }
-
-    console.log("[Altaana] No size selector found on page");
+    scrollToSizeSelector();
   }
+
+  // Pointer events passthrough: iframe tells us when mouse is over interactive content
+  if (event.data?.type === "ALTAANA_POINTER_EVENTS") {
+    const iframe = document.getElementById("altaana-panel-frame");
+    if (iframe) {
+      iframe.style.pointerEvents = event.data.enabled ? "auto" : "none";
+    }
+  }
+});
+
+function scrollToSizeSelector() {
+  const hostname = location.hostname.replace(/^www\./, "");
+
+  // Site-specific selector maps (most reliable)
+  const SITE_SELECTORS = {
+    "tomford.com": ['[data-testid="size-selector"]', '.product-sizes', 'select[name*="size" i]', '.size-selector', '#size-select', '.product-form select'],
+    "tomfordfashion.com": ['[data-testid="size-selector"]', '.product-sizes', 'select[name*="size" i]', '.size-selector', '#size-select', '.product-form select'],
+    "revolve.com": ['#sizeSelect', '.sizes-list', '.product-sizes', '[class*="size-selector"]'],
+    "aloyoga.com": ['[data-testid*="size"]', '.product-sizes', '[class*="size-selector"]'],
+    "thereformation.com": ['[class*="size-selector"]', '[data-testid*="size"]'],
+  };
+
+  // Find matching site selectors
+  let siteSelectors = [];
+  for (const [domain, sels] of Object.entries(SITE_SELECTORS)) {
+    if (hostname === domain || hostname.endsWith("." + domain)) {
+      siteSelectors = sels;
+      break;
+    }
+  }
+
+  // Generic selectors (fallback)
+  const genericSelectors = [
+    '[class*="size-selector"]',
+    '[class*="sizeSelector"]',
+    '[class*="size-picker"]',
+    '[class*="sizePicker"]',
+    '[data-testid*="size"]',
+    '[aria-label*="size" i]',
+    'select[name*="size" i]',
+    '#sizeSelect',
+    '.sizes-list',
+    '.product-sizes',
+  ];
+
+  const allSelectors = [...siteSelectors, ...genericSelectors];
+
+  // Try CSS selectors first — but only within the main product area
+  // Exclude recommendation/footer sections
+  const mainContent = document.querySelector('main, [role="main"], .product-detail, .pdp-container, .product-page') || document.body;
+
+  for (const sel of allSelectors) {
+    const el = mainContent.querySelector(sel);
+    if (el && isInProductArea(el)) {
+      highlightAndScroll(el);
+      return;
+    }
+  }
+
+  // Text-based search: find "Size" labels near the Add to Cart button
+  const addToCartBtn = findAddToCartButton();
+  const sizeLabels = findSizeLabels(mainContent);
+
+  if (sizeLabels.length > 0) {
+    // If we found an Add to Cart button, prefer the size label closest to it
+    let best = sizeLabels[0];
+    if (addToCartBtn) {
+      const cartRect = addToCartBtn.getBoundingClientRect();
+      let bestDist = Infinity;
+      for (const label of sizeLabels) {
+        const rect = label.getBoundingClientRect();
+        const dist = Math.abs(rect.top - cartRect.top);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = label;
+        }
+      }
+    }
+    highlightAndScroll(best);
+    return;
+  }
+
+  console.log("[Altaana] No size selector found on page");
+}
+
+function isInProductArea(el) {
+  // Check element isn't in a recommendations/footer section
+  const rect = el.getBoundingClientRect();
+  const viewportHeight = window.innerHeight;
+  // If element is more than 3x viewport height down, it's likely in recommendations
+  if (rect.top > viewportHeight * 3) return false;
+
+  // Check parent elements for recommendation-like classnames
+  let parent = el.closest('[class*="recommend"], [class*="similar"], [class*="also-like"], [class*="you-may"], footer');
+  return !parent;
+}
+
+function findAddToCartButton() {
+  const buttons = document.querySelectorAll("button, a, input[type='submit']");
+  for (const btn of buttons) {
+    const text = (btn.textContent || btn.value || "").trim().toLowerCase();
+    if (/add to (cart|bag)|buy now/i.test(text)) return btn;
+  }
+  return null;
+}
+
+function findSizeLabels(container) {
+  const labels = container.querySelectorAll("label, span, p, div, h3, h4, legend");
+  const results = [];
+  for (const label of labels) {
+    const text = (label.textContent || "").trim();
+    if (/^size:?\s*$/i.test(text) || /^select\s+size/i.test(text) || /^choose\s+(a\s+)?size/i.test(text)) {
+      if (isInProductArea(label)) {
+        results.push(label);
+      }
+    }
+  }
+  return results;
+}
+
+function highlightAndScroll(el) {
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.style.outline = "2px solid #00CED1";
+  el.style.outlineOffset = "4px";
+  setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 2500);
+  console.log("[Altaana] Scrolled to size selector");
+}
 });
 
 // ── Main ──────────────────────────────────────────────────────────

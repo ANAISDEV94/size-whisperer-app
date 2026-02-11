@@ -573,6 +573,18 @@ Deno.serve(async (req) => {
       recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);
     }
 
+    // Detect denim scale: if available sizes are in the 22-35 waist range
+    const isDenimScale = availableSizes.length > 0 && availableSizes.every(s => {
+      const n = parseInt(s, 10);
+      return !isNaN(n) && n >= 22 && n <= 40;
+    });
+
+    // If denim scale detected but we produced a letter/standard size, re-map
+    if (isDenimScale && isLetterSize(recommendedSize)) {
+      // Convert letter → universal index → closest denim size
+      recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
+    }
+
     // Final snap: ensure recommendedSize is one the target brand actually sells
     if (availableSizes.length) {
       recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
