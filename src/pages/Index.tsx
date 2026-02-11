@@ -2,8 +2,9 @@ import ExtensionPanel from "@/components/panel/ExtensionPanel";
 
 const isEmbedded = window.location !== window.parent.location;
 
-// Add embedded class to body for transparent background
+// Add embedded class to html + body for transparent background
 if (isEmbedded) {
+  document.documentElement.classList.add("embedded");
   document.body.classList.add("embedded");
 }
 

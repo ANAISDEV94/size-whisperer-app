@@ -1,6 +1,9 @@
-/* When embedded in iframe, make body transparent */
-body.embedded {
+/* When embedded in iframe, make everything transparent */
+html.embedded,
+body.embedded,
+body.embedded #root {
   background: transparent !important;
+  min-height: 0 !important;
 }
 
 @tailwind base;
