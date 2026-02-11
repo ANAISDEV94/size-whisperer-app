@@ -1,6 +1,18 @@
 import ExtensionPanel from "@/components/panel/ExtensionPanel";
 
+const isEmbedded = window.location !== window.parent.location;
+
+// Add embedded class to body for transparent background
+if (isEmbedded) {
+  document.body.classList.add("embedded");
+}
+
 const Index = () => {
+  // When embedded in extension iframe, render only the panel with transparent bg
+  if (isEmbedded) {
+    return <ExtensionPanel />;
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* Simulated product page background for demo */}

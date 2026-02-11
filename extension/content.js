@@ -46,7 +46,7 @@ const DOMAIN_TO_BRAND = {
   "andorcollective.com": "and_or_collective",
 };
 
-// Revolve hosts multiple brands – detect from URL path
+// Revolve hosts multiple brands – detect from URL path or breadcrumb brand name
 const REVOLVE_PATH_BRANDS = {
   "/csb/": "csb",
   "/helsa/": "helsa",
@@ -57,6 +57,12 @@ const REVOLVE_PATH_BRANDS = {
   "/superdown/": "superdown",
   "/lovers-friends/": "lovers_and_friends",
   "/for-love-lemons/": "for_love_and_lemons",
+  "/norma-kamali/": "norma_kamali",
+  "/alice-olivia/": "alice_and_olivia",
+  "/bronx-and-banco/": "bronx_and_banco",
+  "/cult-gaia/": "cult_gaia",
+  "/bardot/": "bardot",
+  "/david-koma/": "david_koma",
 };
 
 // ── Category inference from URL path keywords ─────────────────────
@@ -90,8 +96,15 @@ function detectBrand() {
     for (const [prefix, brandKey] of Object.entries(REVOLVE_PATH_BRANDS)) {
       if (path.includes(prefix)) return brandKey;
     }
-    // Default to CSB on revolve if no brand path match
-    return "csb";
+    // Try to extract brand from Revolve URL structure: /r/dp.jsp?...&d=Womens&page=/norma-kamali/...
+    // or from path like /norma-kamali/x-revolve-...
+    const brandMatch = path.match(/^\/([a-z0-9-]+)\//);
+    if (brandMatch) {
+      const slug = brandMatch[1].replace(/-/g, "_");
+      console.log(`[Altaana] Revolve brand slug detected: ${slug}`);
+      return slug;
+    }
+    return null; // Don't default to CSB — skip if unknown
   }
 
   return null;
