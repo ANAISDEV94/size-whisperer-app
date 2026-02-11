@@ -138,6 +138,9 @@ const BRAND_SCALE_MAPS: Record<string, Record<string, number>> = {
   seven_for_all_mankind: { "22": 0, "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9 },
   mother: { "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9, "33": 10, "34": 11 },
   revolve_denim: { "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9 },
+  // UK sizes → universal index (UK 4 = US 0, UK 6 = US 2, etc.)
+  david_koma: { "4": 1, "6": 2, "8": 3, "10": 4, "12": 5, "14": 6, "16": 7 },
+  victoria_beckham: { "4": 1, "6": 2, "8": 3, "10": 4, "12": 5, "14": 6, "16": 7 },
 };
 
 // Universal size-to-index mapping for cross-scale comparison
