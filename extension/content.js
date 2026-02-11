@@ -38,6 +38,7 @@ const DOMAIN_TO_BRAND = {
   "stellamccartney.com": "stella_mccartney",
   "superdown.com": "superdown",
   "tomford.com": "tom_ford",
+  "tomfordfashion.com": "tom_ford",
   "torrid.com": "torrid",
   "valentino.com": "valentino",
   "versace.com": "versace",

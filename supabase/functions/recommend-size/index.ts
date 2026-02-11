@@ -294,18 +294,18 @@ async function scrapeProductFit(productUrl: string): Promise<string | null> {
       },
       body: JSON.stringify({
         messages: [
-          { role: "system", content: "Extract fit and sizing info from this product page text. Return a concise summary (under 50 words) of fit details like: runs small/large, oversized, fitted, true to size, size up/down recommendations, specific measurements mentioned. If no fit info is found, return empty string." },
+          { role: "system", content: "Extract fit, sizing, and fabric/material info from this product page text. Return a concise summary (under 80 words) covering: fit details (runs small/large, oversized, fitted, true to size, size up/down recommendations), fabric composition (e.g. 95% polyester 5% spandex), stretch level (no stretch, slight stretch, high stretch), and any specific measurements mentioned. If no info is found, return empty string." },
           { role: "user", content: stripped },
         ],
         tools: [{
           type: "function",
           function: {
             name: "extract_fit",
-            description: "Extract product fit details",
+            description: "Extract product fit and fabric details",
             parameters: {
               type: "object",
               properties: {
-                fit_summary: { type: "string", description: "Concise fit summary or empty string if none found" },
+                fit_summary: { type: "string", description: "Concise fit and fabric summary or empty string if none found" },
               },
               required: ["fit_summary"],
               additionalProperties: false,
@@ -360,8 +360,8 @@ ${context.productFitSummary ? `- This specific product: ${context.productFitSumm
 Rules:
 - Each bullet must be under 15 words
 - First bullet references what they wear in their anchor brand
-- Second bullet addresses how the target brand fits
-- Third bullet mentions the fit preference or general advice
+- Second bullet addresses how the target brand fits, including fabric/material details if available
+- Third bullet mentions the fit preference or fabric-related sizing advice (e.g. stretch, give)
 - Be definitive and confident, no hedging language
 - Do NOT use bullet point characters, just return plain text`;
 
@@ -520,7 +520,8 @@ Deno.serve(async (req) => {
       .eq("brand_key", target_brand_key)
       .single();
 
-    const targetDisplayName = targetBrand?.display_name || target_brand_key;
+    // Humanize brand key if no catalog entry: "norma_kamali" → "Norma Kamali"
+    const targetDisplayName = targetBrand?.display_name || target_brand_key.split("_").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
     const targetFitTendency = targetBrand?.fit_tendency || null;
     const targetSizeScale = targetBrand?.size_scale || "letter";
     const availableSizes: string[] = (targetBrand?.available_sizes as string[]) || [];
