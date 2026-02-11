@@ -19,14 +19,23 @@ function classifySizes(sizes: string[], sizeScale: string): SizeGroup[] {
     return [{ label: "", sizes }];
   }
 
+  // Pre-scan: detect denim range by checking for odd numbers in 22-35
+  const allNums = sizes.map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+  const inDenimRange = allNums.filter(n => n >= DENIM_RANGE.min && n <= DENIM_RANGE.max);
+  const hasOddInDenimRange = inDenimRange.some(n => n % 2 !== 0);
+  const denimSet = hasOddInDenimRange ? new Set(inDenimRange.map(String)) : new Set<string>();
+
   const letters: string[] = [];
   const eu: string[] = [];
+  const denim: string[] = [];
   const remaining: string[] = [];
 
-  // First pass: extract letters and EU sizes
+  // First pass: classify letters, denim (before EU to handle overlap like 34), then EU
   for (const s of sizes) {
     if (LETTER_PATTERN.test(s)) {
       letters.push(s);
+    } else if (denimSet.has(s)) {
+      denim.push(s);
     } else if (EU_SIZES.has(s)) {
       eu.push(s);
     } else {
@@ -34,26 +43,16 @@ function classifySizes(sizes: string[], sizeScale: string): SizeGroup[] {
     }
   }
 
-  // Second pass: classify remaining numbers using context
+  // Second pass: classify remaining numbers
   const hasEU = eu.length > 0;
-  const hasOddInDenimRange = remaining.some(r => {
-    const rn = parseInt(r, 10);
-    return rn >= DENIM_RANGE.min && rn <= DENIM_RANGE.max && rn % 2 !== 0;
-  });
-
   const numeric: string[] = [];
-  const denim: string[] = [];
   const brandSpecific: string[] = [];
 
   for (const s of remaining) {
     const n = parseInt(s, 10);
     if (isNaN(n)) continue;
 
-    if (n >= DENIM_RANGE.min && n <= DENIM_RANGE.max && hasOddInDenimRange) {
-      // Odd numbers in 22-35 range confirm this group is denim waist sizes
-      denim.push(s);
-    } else if (hasEU && n >= 1 && n <= 5 && s.length === 1) {
-      // Brand-specific (e.g. Versace 1-5, D&G 1-5) only when EU sizes coexist
+    if (hasEU && n >= 1 && n <= 5 && s.length === 1) {
       brandSpecific.push(s);
     } else {
       numeric.push(s);
