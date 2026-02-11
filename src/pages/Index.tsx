@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import ExtensionPanel from "@/components/panel/ExtensionPanel";
 
 const isEmbedded = window.location !== window.parent.location;
@@ -6,6 +7,15 @@ const isEmbedded = window.location !== window.parent.location;
 if (isEmbedded) {
   document.documentElement.classList.add("embedded");
   document.body.classList.add("embedded");
+
+  // Set up pointer-events passthrough: tell parent iframe to enable/disable pointer-events
+  // based on whether mouse is over interactive content
+  document.addEventListener("mouseenter", () => {
+    window.parent.postMessage({ type: "ALTAANA_POINTER_EVENTS", enabled: true }, "*");
+  });
+  document.addEventListener("mouseleave", () => {
+    window.parent.postMessage({ type: "ALTAANA_POINTER_EVENTS", enabled: false }, "*");
+  });
 }
 
 const Index = () => {

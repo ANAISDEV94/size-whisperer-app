@@ -51,13 +51,16 @@ const ExtensionPanel = () => {
   const [, setProfile] = useState<UserProfile | null>(null);
   const [confirmedSize, setConfirmedSize] = useState<string | null>(cached?.size || null);
 
+  // Check for guest session flag
+  const isGuest = typeof window !== 'undefined' && localStorage.getItem('altaana_guest_session') === 'true';
+
   const handleOpen = useCallback(() => {
-    if (!user) {
+    if (!user && !isGuest) {
       setShowAuth(true);
     } else {
       setIsOpen(true);
     }
-  }, [user]);
+  }, [user, isGuest]);
 
   const handleClose = useCallback(() => {
     setIsOpen(false);
@@ -69,6 +72,12 @@ const ExtensionPanel = () => {
     setIsOpen(true);
     setPanelState("profile");
   }, []);
+
+  // "Continue without saving" — persist guest flag
+  const handleContinueWithout = useCallback(() => {
+    localStorage.setItem('altaana_guest_session', 'true');
+    handleAuthComplete();
+  }, [handleAuthComplete]);
 
   const handleGoogleSignIn = useCallback(async () => {
     const result = await signInWithGoogle();
@@ -196,7 +205,7 @@ const ExtensionPanel = () => {
           onGoogleSignIn={handleGoogleSignIn}
           onEmailSignIn={handleEmailSignIn}
           onEmailSignUp={handleEmailSignUp}
-          onContinueWithout={handleAuthComplete}
+          onContinueWithout={handleContinueWithout}
           onClose={handleClose}
         />
       )}
