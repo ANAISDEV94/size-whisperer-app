@@ -39,6 +39,16 @@ function offsetSize(size: string, delta: number, scale: "numeric" | "letter"): s
   return size;
 }
 
+// Detect embedded mode from URL params
+const isEmbedded = (() => {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("embedded") === "1" || params.get("source") === "extension";
+})();
+
+if (isEmbedded) {
+  console.log("[Altaana][panel] Embedded mode ON - launcher suppressed");
+}
+
 const ExtensionPanel = () => {
   const { user, isLoading, signUp, signIn, signInWithGoogle, signOut } = useAuth();
   const { recommendation, recommendationId, isLoading: recLoading, error: recError, fetchRecommendation, logAdjustment } = useRecommendation();
@@ -230,6 +240,21 @@ const ExtensionPanel = () => {
   };
 
   if (isLoading) return null;
+
+  // In embedded mode: render panel content directly, no launcher
+  if (isEmbedded) {
+    return (
+      <div
+        className="flex flex-col overflow-hidden w-full h-full"
+        style={{
+          background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",
+        }}
+      >
+        <PanelHeader onClose={() => {}} />
+        {renderScreen()}
+      </div>
+    );
+  }
 
   return (
     <>
