@@ -244,20 +244,28 @@ const ExtensionPanel = () => {
   // In embedded mode: render panel content directly, no launcher
   if (isEmbedded) {
     return (
-      <div
-        className="flex flex-col overflow-hidden w-full"
-        style={{
-          background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",
-          minHeight: "100vh",
-          height: "100%",
-        }}
-      >
-        <PanelHeader onClose={() => {
-          if (window.parent !== window) {
-            window.parent.postMessage({ type: "ALTAANA_PANEL_RESIZE", mode: "widget" }, "*");
-          }
-        }} />
-        {renderScreen()}
+      <div className="fixed right-4 top-0 bottom-0 z-50 flex items-center">
+        <div
+          className="flex flex-col overflow-hidden"
+          style={{
+            width: 404,
+            height: 733,
+            maxHeight: "calc(100vh - 32px)",
+            borderRadius: 20,
+            background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",
+            border: "1px solid rgba(0, 206, 209, 0.18)",
+            boxShadow: "none",
+          }}
+        >
+          <PanelHeader onClose={() => {
+            if (window.parent !== window) {
+              window.parent.postMessage({ type: "ALTAANA_PANEL_RESIZE", mode: "widget" }, "*");
+            }
+          }} />
+          <div className="flex flex-col flex-1 overflow-hidden">
+            {renderScreen()}
+          </div>
+        </div>
       </div>
     );
   }

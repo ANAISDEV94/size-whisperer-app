@@ -282,7 +282,7 @@ function injectPanel(brandKey) {
     height: 0;
     border: none;
     z-index: 2147483647;
-    background: #0D0D0D;
+    background: transparent;
     pointer-events: none;
     overflow: hidden;
   `;
