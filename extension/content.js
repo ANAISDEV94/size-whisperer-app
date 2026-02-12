@@ -191,6 +191,7 @@ function injectPanel(brandKey) {
   iframe.id = "altaana-panel-frame";
   iframe.src = iframeSrc;
   iframe.allow = "clipboard-write";
+  iframe.setAttribute("allowtransparency", "true");
 
   // Start in WIDGET mode: small iframe covering only the widget pill
   iframe.style.cssText = `
