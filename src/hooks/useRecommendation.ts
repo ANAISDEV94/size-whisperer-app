@@ -7,6 +7,8 @@ interface UseRecommendationReturn {
   recommendationId: string | null;
   isLoading: boolean;
   error: string | null;
+  debugMode: boolean;
+  setDebugMode: (v: boolean) => void;
   fetchRecommendation: (profile: UserProfile, targetBrandKey: string, targetCategory: string, userId?: string, productUrl?: string, weight?: string, height?: string) => Promise<void>;
   logAdjustment: (action: "size_down" | "keep" | "size_up", finalSize: string) => Promise<void>;
 }
@@ -16,6 +18,7 @@ export function useRecommendation(): UseRecommendationReturn {
   const [recommendationId, setRecommendationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [debugMode, setDebugMode] = useState(false);
 
   const fetchRecommendation = useCallback(async (
     profile: UserProfile,
@@ -44,6 +47,7 @@ export function useRecommendation(): UseRecommendationReturn {
           product_url: productUrl,
           weight: weight || undefined,
           height: height || undefined,
+          debug_mode: debugMode,
         },
       });
 
@@ -56,6 +60,9 @@ export function useRecommendation(): UseRecommendationReturn {
         sizeScale: data.sizeScale || "letter",
         bullets: data.bullets,
         comparisons: data.comparisons,
+        confidence: data.confidence || undefined,
+        needMoreInfo: data.needMoreInfo || false,
+        debug: data.debug || undefined,
       });
       setRecommendationId(data.recommendation_id || null);
     } catch (e) {
@@ -64,7 +71,7 @@ export function useRecommendation(): UseRecommendationReturn {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [debugMode]);
 
   const logAdjustment = useCallback(async (action: "size_down" | "keep" | "size_up", finalSize: string) => {
     if (!recommendationId) return;
@@ -79,5 +86,5 @@ export function useRecommendation(): UseRecommendationReturn {
     }
   }, [recommendationId]);
 
-  return { recommendation, recommendationId, isLoading, error, fetchRecommendation, logAdjustment };
+  return { recommendation, recommendationId, isLoading, error, debugMode, setDebugMode, fetchRecommendation, logAdjustment };
 }

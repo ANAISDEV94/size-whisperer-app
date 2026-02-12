@@ -27,6 +27,38 @@ export interface SizeRecommendation {
   sizeScale: "numeric" | "letter";
   bullets: string[];
   comparisons: BrandComparison[];
+  confidence?: ConfidenceInfo;
+  needMoreInfo?: boolean;
+  debug?: DebugTrace;
+}
+
+export interface ConfidenceInfo {
+  score: number;
+  reasons: string[];
+  matchMethod: "measurement" | "fallback_index" | "fallback_legacy";
+}
+
+export interface DebugTrace {
+  detectedCategory: string;
+  anchorBrand: string;
+  anchorSize: string;
+  anchorMeasurements: Record<string, number>;
+  targetBrandKey: string;
+  targetBrandDisplayName: string;
+  targetSizeScale: string;
+  availableSizes: string[];
+  fitPreference: string;
+  targetFitTendency: string | null;
+  isDenimScale: boolean;
+  usedFallback: boolean;
+  usedEstimatedMeasurements: boolean;
+  targetRowUsed: {
+    size_label: string;
+    measurements: Record<string, unknown> | null;
+    fit_notes: string | null;
+  } | null;
+  allSizeScores: { size: string; score: number; matched: number }[];
+  comparisonLogic: string[];
 }
 
 export interface BrandComparison {
