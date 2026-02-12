@@ -5,6 +5,11 @@ html.embedded body #root {
   background: transparent !important;
   background-color: transparent !important;
   min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+html.embedded body #root > * {
+  background: transparent !important;
 }
 
 @tailwind base;
