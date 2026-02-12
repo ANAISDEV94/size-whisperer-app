@@ -245,9 +245,11 @@ const ExtensionPanel = () => {
   if (isEmbedded) {
     return (
       <div
-        className="flex flex-col overflow-hidden w-full h-full"
+        className="flex flex-col overflow-hidden w-full"
         style={{
           background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",
+          minHeight: "100vh",
+          height: "100%",
         }}
       >
         <PanelHeader onClose={() => {}} />
