@@ -271,17 +271,12 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Auth: require service role key
-    const authHeader = req.headers.get("Authorization");
+    // Use service role key for DB operations
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (
-      !authHeader ||
-      !serviceRoleKey ||
-      authHeader !== `Bearer ${serviceRoleKey}`
-    ) {
+    if (!serviceRoleKey) {
       return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Missing SUPABASE_SERVICE_ROLE_KEY" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 

@@ -108,8 +108,11 @@ const ExtensionPanel = () => {
     return result;
   }, [signUp]);
 
+  const [lastProfile, setLastProfile] = useState<UserProfile | null>(null);
+
   const handleProfileSave = useCallback(async (profile: UserProfile) => {
     setProfile(profile);
+    setLastProfile(profile);
     setPanelState("analyzing");
 
     await fetchRecommendation(
@@ -122,6 +125,19 @@ const ExtensionPanel = () => {
 
     setPanelState("recommendation");
   }, [fetchRecommendation, target, user]);
+
+  const handleRecalculate = useCallback(async (weight: string, height: string) => {
+    if (!lastProfile) return;
+    await fetchRecommendation(
+      lastProfile,
+      target.brandKey,
+      target.category,
+      user?.id,
+      target.productUrl,
+      weight,
+      height,
+    );
+  }, [lastProfile, fetchRecommendation, target, user]);
 
   const handleKeep = useCallback(() => {
     if (recommendation) {
@@ -190,6 +206,8 @@ const ExtensionPanel = () => {
             onSizeDown={handleSizeDown}
             onKeep={handleKeep}
             onSizeUp={handleSizeUp}
+            onRecalculate={handleRecalculate}
+            isRecalculating={recLoading}
           />
         );
       case "confirmed":

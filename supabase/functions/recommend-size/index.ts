@@ -68,15 +68,38 @@ interface SizingRow {
   fit_notes: string | null;
 }
 
+// Category-to-measurement priority mapping
+const CATEGORY_MEASUREMENT_KEYS: Record<string, string[]> = {
+  tops: ["bust", "waist", "shoulders", "sleeve_length"],
+  dresses: ["bust", "waist", "hips", "shoulders"],
+  jeans: ["waist", "hips", "thigh", "rise"],
+  denim: ["waist", "hips", "thigh", "rise"],
+  shorts: ["waist", "hips", "thigh", "rise"],
+  skirts: ["waist", "hips"],
+  swimwear: ["bust", "waist", "hips", "underbust"],
+  "sports bras": ["bust", "underbust"],
+  bodysuits: ["bust", "waist", "hips", "underbust"],
+  shapewear: ["bust", "waist", "hips", "underbust"],
+  underwear: ["waist", "hips"],
+  loungewear: ["bust", "waist", "hips"],
+  default: ["bust", "waist", "hips"],
+};
+
+function getMeasurementKeys(category: string): string[] {
+  const lower = category.toLowerCase();
+  return CATEGORY_MEASUREMENT_KEYS[lower] || CATEGORY_MEASUREMENT_KEYS.default;
+}
+
 function findClosestSize(
   anchorMeasurements: Record<string, MeasurementValue | null> | null,
   targetSizes: SizingRow[],
-  fitPreference: string
+  fitPreference: string,
+  category?: string
 ): { size: string; fitNotes: string | null } | null {
   if (!anchorMeasurements || targetSizes.length === 0) return null;
 
-  // Key measurements to compare (in priority order)
-  const keys = ["bust", "waist", "hips"];
+  // Use category-specific measurement keys in priority order
+  const keys = getMeasurementKeys(category || "default");
   const anchorMids: Record<string, number> = {};
   for (const k of keys) {
     const mid = getMidpoint(anchorMeasurements[k]);
@@ -254,6 +277,90 @@ function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetSc
     resultSize = snapToAvailableSize(resultSize, availableSizes, fitPreference, targetBrandKey);
   }
   return resultSize;
+}
+
+// ── AI body measurement estimation from weight + height ─────────
+
+async function estimateBodyMeasurements(
+  weight: string,
+  height: string,
+  fitPreference: string,
+): Promise<Record<string, MeasurementValue> | null> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_API_KEY) return null;
+
+  try {
+    const prompt = `Given a woman who weighs ${weight} and is ${height} tall with a "${fitPreference.replace(/_/g, " ")}" fit preference, estimate her body measurements in inches. Return bust, waist, hips, underbust, thigh, and shoulders as numeric ranges (min-max). Be realistic and use standard fashion industry measurement guides.`;
+
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: "You are a body measurement estimation expert. Return measurements as JSON via the tool call." },
+          { role: "user", content: prompt },
+        ],
+        tools: [{
+          type: "function",
+          function: {
+            name: "body_measurements",
+            description: "Estimated body measurements in inches",
+            parameters: {
+              type: "object",
+              properties: {
+                bust_min: { type: "number" },
+                bust_max: { type: "number" },
+                waist_min: { type: "number" },
+                waist_max: { type: "number" },
+                hips_min: { type: "number" },
+                hips_max: { type: "number" },
+                underbust_min: { type: "number" },
+                underbust_max: { type: "number" },
+                thigh_min: { type: "number" },
+                thigh_max: { type: "number" },
+                shoulders_min: { type: "number" },
+                shoulders_max: { type: "number" },
+              },
+              required: ["bust_min", "bust_max", "waist_min", "waist_max", "hips_min", "hips_max"],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: "function", function: { name: "body_measurements" } },
+      }),
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall) return null;
+
+    const args = JSON.parse(toolCall.function.arguments);
+    const result: Record<string, MeasurementValue> = {};
+
+    const pairs = [
+      ["bust", "bust_min", "bust_max"],
+      ["waist", "waist_min", "waist_max"],
+      ["hips", "hips_min", "hips_max"],
+      ["underbust", "underbust_min", "underbust_max"],
+      ["thigh", "thigh_min", "thigh_max"],
+      ["shoulders", "shoulders_min", "shoulders_max"],
+    ];
+
+    for (const [key, minKey, maxKey] of pairs) {
+      if (args[minKey] !== undefined && args[maxKey] !== undefined) {
+        result[key] = { min: args[minKey], max: args[maxKey], unit: "in" };
+      }
+    }
+
+    return Object.keys(result).length > 0 ? result : null;
+  } catch (e) {
+    console.error("Body estimation failed:", e);
+    return null;
+  }
 }
 
 // ── Product page fit scraping ───────────────────────────────────
@@ -500,6 +607,8 @@ Deno.serve(async (req) => {
       target_category,
       user_id,
       product_url,
+      weight,
+      height,
     } = await req.json();
 
     if (!anchor_brands?.length || !target_brand_key) {
@@ -546,25 +655,58 @@ Deno.serve(async (req) => {
     let recommendedSize: string;
     let fitNotes: string | null = null;
 
-    if (targetSizingData?.length && anchorSizingData?.length) {
-      const anchorBrand = anchor_brands[0];
-      const anchorRow = anchorSizingData.find(
-        (r: SizingRow & { brand_key: string }) =>
-          r.brand_key === anchorBrand.brandKey &&
-          r.size_label.toUpperCase() === anchorBrand.size.toUpperCase()
+    // If weight/height provided, estimate body measurements and use them
+    let estimatedMeasurements: Record<string, MeasurementValue> | null = null;
+    if (weight || height) {
+      estimatedMeasurements = await estimateBodyMeasurements(
+        weight || "",
+        height || "",
+        fit_preference || "true_to_size",
       );
+    }
 
-      if (anchorRow?.measurements) {
+    if (targetSizingData?.length && (anchorSizingData?.length || estimatedMeasurements)) {
+      let anchorMeasurements: Record<string, MeasurementValue | null> | null = null;
+
+      // Try anchor brand measurements first
+      if (anchorSizingData?.length) {
+        const anchorBrand = anchor_brands[0];
+        const anchorRow = anchorSizingData.find(
+          (r: SizingRow & { brand_key: string }) =>
+            r.brand_key === anchorBrand.brandKey &&
+            r.size_label.toUpperCase() === anchorBrand.size.toUpperCase()
+        );
+        if (anchorRow?.measurements) {
+          anchorMeasurements = anchorRow.measurements as Record<string, MeasurementValue | null>;
+        }
+      }
+
+      // Blend estimated measurements with anchor measurements
+      if (estimatedMeasurements) {
+        if (anchorMeasurements) {
+          // Merge: anchor takes priority, estimated fills gaps
+          for (const [k, v] of Object.entries(estimatedMeasurements)) {
+            if (!anchorMeasurements[k]) {
+              anchorMeasurements[k] = v;
+            }
+          }
+        } else {
+          anchorMeasurements = estimatedMeasurements;
+        }
+      }
+
+      if (anchorMeasurements) {
         const result = findClosestSize(
-          anchorRow.measurements as Record<string, MeasurementValue | null>,
+          anchorMeasurements,
           targetSizingData as SizingRow[],
-          fit_preference || "true_to_size"
+          fit_preference || "true_to_size",
+          category
         );
         if (result) {
           recommendedSize = convertToScale(result.size, targetSizeScale);
           fitNotes = result.fitNotes;
         } else {
-          recommendedSize = fallbackSizeMapping(anchorBrand.size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchorBrand.brandKey, target_brand_key);
+          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);
         }
       } else {
         recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);

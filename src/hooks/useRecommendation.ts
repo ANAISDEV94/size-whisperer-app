@@ -7,7 +7,7 @@ interface UseRecommendationReturn {
   recommendationId: string | null;
   isLoading: boolean;
   error: string | null;
-  fetchRecommendation: (profile: UserProfile, targetBrandKey: string, targetCategory: string, userId?: string, productUrl?: string) => Promise<void>;
+  fetchRecommendation: (profile: UserProfile, targetBrandKey: string, targetCategory: string, userId?: string, productUrl?: string, weight?: string, height?: string) => Promise<void>;
   logAdjustment: (action: "size_down" | "keep" | "size_up", finalSize: string) => Promise<void>;
 }
 
@@ -23,6 +23,8 @@ export function useRecommendation(): UseRecommendationReturn {
     targetCategory: string,
     userId?: string,
     productUrl?: string,
+    weight?: string,
+    height?: string,
   ) => {
     setIsLoading(true);
     setError(null);
@@ -40,6 +42,8 @@ export function useRecommendation(): UseRecommendationReturn {
           target_category: targetCategory,
           user_id: userId,
           product_url: productUrl,
+          weight: weight || undefined,
+          height: height || undefined,
         },
       });
 
