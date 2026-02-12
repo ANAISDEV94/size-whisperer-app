@@ -1,33 +1,30 @@
 
 
-# Fix: Embedded Mode Background and Close Button
+# Fix: Restore Panel Design in Embedded Mode
 
-## Root Causes Found
+## Problem
+In embedded mode, the panel renders as a full-screen flat black rectangle with sharp edges. The original design uses a 404x733px floating card with 20px rounded corners, a subtle cyan border, and vertical centering — this styling is completely missing in embedded mode.
 
-### 1. Iframe URL missing `source=extension` parameter
-In `extension/content.js` (line 198), the iframe URL is built as:
-```
-${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}
-```
-It does NOT include `source=extension` or `embedded=1`. This means the Lovable app inside the iframe never detects embedded mode, so it renders in normal mode (with FloatingWidget, wrong layout, etc.).
+## Solution
+Update the embedded mode rendering in `ExtensionPanel.tsx` to use the same panel shell styling as normal mode: same dimensions, rounded corners, border, and centering. The only difference from normal mode is that the FloatingWidget is suppressed and there's no slide-in animation.
 
-### 2. Close button is a no-op in embedded mode
-In `ExtensionPanel.tsx` (line 255), embedded mode passes `onClose={() => {}}` -- an empty function. Clicking the X does nothing. It should send a `postMessage` to the parent frame telling it to collapse the iframe.
+Also update the iframe in `extension/content.js` to use `background: transparent` again (now that `source=extension` is being passed, the app handles its own background correctly), so the rounded corners are visible against the host page.
 
-### 3. Iframe background set to transparent
-In `content.js` (line 285), the iframe has `background: transparent`. Combined with issue #1 (embedded mode not activating), the solid dark background CSS never applies, resulting in the see-through appearance.
+## Changes
 
-## Fix Plan
+### File 1: `src/components/panel/ExtensionPanel.tsx`
+Replace the embedded mode container (lines 246-261) with the same panel shell used in normal mode:
+- Outer wrapper: `fixed right-4 top-0 bottom-0 flex items-center` (same positioning)
+- Inner panel: `width: 404`, `height: 733`, `borderRadius: 20`, `border: 1px solid rgba(0, 206, 209, 0.18)`, same gradient background
+- No FloatingWidget, no slide animation — panel is shown immediately
+- Keep the existing `onClose` postMessage logic
 
-### File 1: `extension/content.js`
-- Add `&source=extension` to the iframe `src` URL so the Lovable app correctly detects embedded mode
-- Change iframe `background` from `transparent` to `#0D0D0D` so there's always a dark fallback
-
-### File 2: `src/components/panel/ExtensionPanel.tsx`
-- Replace the empty `onClose={() => {}}` in the embedded branch with a function that sends `postMessage({ type: "ALTAANA_PANEL_RESIZE", mode: "widget" }, "*")` to the parent window, which will collapse the iframe
+### File 2: `extension/content.js`
+- Change iframe `background` back from `#0D0D0D` to `transparent` so the rounded panel corners show properly against the host site
+- Keep `allowtransparency="true"` (already there)
 
 ## What stays the same
-- No changes to recommendation logic, auth, Airtable, screen flows, or any other files
-- The normal (non-embedded) mode is untouched
-- All styling, layout, spacing, and colors remain identical
-
+- All screen flows, recommendation logic, auth, Airtable — untouched
+- Normal (non-embedded) mode — untouched
+- The `source=extension` parameter fix — stays
+- The close button postMessage fix — stays
