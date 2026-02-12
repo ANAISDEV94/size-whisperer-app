@@ -11,6 +11,7 @@ import ProfileScreen from "./screens/ProfileScreen";
 import AnalyzingScreen from "./screens/AnalyzingScreen";
 import RecommendationScreen from "./screens/RecommendationScreen";
 import ConfirmedScreen from "./screens/ConfirmedScreen";
+import NeedMoreInfoScreen from "./screens/NeedMoreInfoScreen";
 
 // ── Read target brand from URL params ───────────────────────────
 function useTargetBrand() {
@@ -51,7 +52,7 @@ if (isEmbedded) {
 
 const ExtensionPanel = () => {
   const { user, isLoading, signUp, signIn, signInWithGoogle, signOut } = useAuth();
-  const { recommendation, recommendationId, isLoading: recLoading, error: recError, fetchRecommendation, logAdjustment } = useRecommendation();
+  const { recommendation, recommendationId, isLoading: recLoading, error: recError, debugMode, setDebugMode, fetchRecommendation, logAdjustment } = useRecommendation();
   const target = useTargetBrand();
   const { cached, save: saveConfirmation } = useConfirmationMemory(target.brandKey, target.productUrl);
 
@@ -214,6 +215,31 @@ const ExtensionPanel = () => {
         if (!recommendation) {
           return <AnalyzingScreen key="analyzing-fallback" />;
         }
+        // Show "Need more info" if confidence is low
+        if (recommendation.needMoreInfo) {
+          return (
+            <NeedMoreInfoScreen
+              key="need-more-info"
+              confidenceScore={recommendation.confidence?.score ?? 0}
+              confidenceReasons={recommendation.confidence?.reasons ?? []}
+              onSubmitMeasurement={async (key, value) => {
+                if (!lastProfile) return;
+                // Re-fetch with the measurement as weight/height proxy
+                // The user provides a direct measurement — pass as height for re-estimation
+                await fetchRecommendation(
+                  lastProfile,
+                  target.brandKey,
+                  target.category,
+                  user?.id,
+                  target.productUrl,
+                  undefined,
+                  `${value}" ${key}`, // encode measurement into height field for AI estimation
+                );
+              }}
+              isLoading={recLoading}
+            />
+          );
+        }
         return (
           <RecommendationScreen
             key="recommendation"
@@ -223,6 +249,7 @@ const ExtensionPanel = () => {
             onSizeUp={handleSizeUp}
             onRecalculate={handleRecalculate}
             isRecalculating={recLoading}
+            debugMode={debugMode}
           />
         );
       case "confirmed":
@@ -257,11 +284,15 @@ const ExtensionPanel = () => {
             boxShadow: "none",
           }}
         >
-          <PanelHeader onClose={() => {
-            if (window.parent !== window) {
-              window.parent.postMessage({ type: "ALTAANA_PANEL_RESIZE", mode: "widget" }, "*");
-            }
-          }} />
+          <PanelHeader
+            onClose={() => {
+              if (window.parent !== window) {
+                window.parent.postMessage({ type: "ALTAANA_PANEL_RESIZE", mode: "widget" }, "*");
+              }
+            }}
+            debugMode={debugMode}
+            onToggleDebug={() => setDebugMode(!debugMode)}
+          />
           <div className="flex flex-col flex-1 overflow-hidden">
             {renderScreen()}
           </div>
@@ -297,7 +328,7 @@ const ExtensionPanel = () => {
                 boxShadow: "none",
               }}
             >
-              <PanelHeader onClose={handleClose} />
+              <PanelHeader onClose={handleClose} debugMode={debugMode} onToggleDebug={() => setDebugMode(!debugMode)} />
               <AnimatePresence mode="wait">
                 <motion.div
                   key={panelState}

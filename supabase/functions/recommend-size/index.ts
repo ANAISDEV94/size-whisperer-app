@@ -38,8 +38,6 @@ function sizeDown(size: string): string | null {
 }
 
 // ── Deterministic size mapping ──────────────────────────────────
-// Compare measurements between anchor brand sizes and target brand sizes
-// to find the closest match
 
 interface MeasurementValue {
   value?: number;
@@ -90,15 +88,86 @@ function getMeasurementKeys(category: string): string[] {
   return CATEGORY_MEASUREMENT_KEYS[lower] || CATEGORY_MEASUREMENT_KEYS.default;
 }
 
+// ── Confidence scoring ──────────────────────────────────────────
+
+interface ConfidenceResult {
+  score: number; // 0-100
+  reasons: string[];
+  matchMethod: "measurement" | "fallback_index" | "fallback_legacy";
+}
+
+function computeConfidence(
+  anchorMeasurements: Record<string, MeasurementValue | null> | null,
+  targetSizingData: SizingRow[] | null,
+  bestScore: number | null,
+  matchedKeys: number,
+  totalKeys: number,
+  usedFallback: boolean,
+  usedEstimated: boolean,
+): ConfidenceResult {
+  const reasons: string[] = [];
+  let score = 100;
+  let matchMethod: ConfidenceResult["matchMethod"] = "measurement";
+
+  if (usedFallback) {
+    score -= 40;
+    matchMethod = "fallback_index";
+    reasons.push("No sizing chart data — used universal index mapping");
+  }
+
+  if (!anchorMeasurements || Object.keys(anchorMeasurements).length === 0) {
+    score -= 30;
+    reasons.push("No anchor measurements available");
+  }
+
+  if (!targetSizingData || targetSizingData.length === 0) {
+    score -= 25;
+    reasons.push("No target brand sizing chart");
+  }
+
+  if (matchedKeys < totalKeys && matchedKeys > 0) {
+    const pct = Math.round((1 - matchedKeys / totalKeys) * 20);
+    score -= pct;
+    reasons.push(`Only ${matchedKeys}/${totalKeys} measurement dimensions matched`);
+  }
+
+  if (bestScore !== null && bestScore > 2) {
+    const penalty = Math.min(20, Math.round(bestScore * 5));
+    score -= penalty;
+    reasons.push(`Average measurement deviation: ${bestScore.toFixed(1)} inches`);
+  }
+
+  if (usedEstimated) {
+    score -= 10;
+    reasons.push("Used AI-estimated body measurements");
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  if (reasons.length === 0) reasons.push("High confidence — full measurement match");
+
+  return { score, reasons, matchMethod };
+}
+
+// Extended findClosestSize returning debug trace
+interface ClosestSizeResult {
+  size: string;
+  fitNotes: string | null;
+  bestScore: number;
+  matchedKeys: number;
+  totalKeys: number;
+  anchorMids: Record<string, number>;
+  targetRowUsed: SizingRow | null;
+  allScores: { size: string; score: number; matched: number }[];
+}
+
 function findClosestSize(
   anchorMeasurements: Record<string, MeasurementValue | null> | null,
   targetSizes: SizingRow[],
   fitPreference: string,
   category?: string
-): { size: string; fitNotes: string | null } | null {
+): ClosestSizeResult | null {
   if (!anchorMeasurements || targetSizes.length === 0) return null;
 
-  // Use category-specific measurement keys in priority order
   const keys = getMeasurementKeys(category || "default");
   const anchorMids: Record<string, number> = {};
   for (const k of keys) {
@@ -110,6 +179,7 @@ function findClosestSize(
 
   let bestSize = targetSizes[0];
   let bestScore = Infinity;
+  const allScores: { size: string; score: number; matched: number }[] = [];
 
   for (const row of targetSizes) {
     if (!row.measurements) continue;
@@ -124,6 +194,7 @@ function findClosestSize(
     }
     if (matched > 0) {
       score /= matched;
+      allScores.push({ size: row.size_label, score, matched });
       if (score < bestScore) {
         bestScore = score;
         bestSize = row;
@@ -141,7 +212,16 @@ function findClosestSize(
     if (up) resultSize = up;
   }
 
-  return { size: resultSize, fitNotes: bestSize.fit_notes };
+  return {
+    size: resultSize,
+    fitNotes: bestSize.fit_notes,
+    bestScore,
+    matchedKeys: allScores.find(s => s.size === bestSize.size_label)?.matched || 0,
+    totalKeys: Object.keys(anchorMids).length,
+    anchorMids,
+    targetRowUsed: bestSize,
+    allScores: allScores.sort((a, b) => a.score - b.score),
+  };
 }
 
 // ── Size scale conversion ────────────────────────────────────────
@@ -153,41 +233,30 @@ const NUMERIC_TO_LETTER: Record<string, string> = {
 };
 
 // Brand-specific size scale mappings to universal US numeric index
-// Each maps brand sizes → approximate US numeric equivalent index
 const BRAND_SCALE_MAPS: Record<string, Record<string, number>> = {
   zimmermann: { "0": 1, "1": 2, "2": 4, "3": 6, "4": 8, "5": 10 },
-  and_or_collective: { "1": 2, "2": 6, "3": 10 }, // 1=XS/S, 2=M, 3=L/XL
-  // Denim waist sizes → universal index (US numeric equivalent)
+  and_or_collective: { "1": 2, "2": 6, "3": 10 },
   seven_for_all_mankind: { "22": 0, "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9 },
   mother: { "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9, "33": 10, "34": 11 },
   revolve_denim: { "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9 },
-  // UK sizes → universal index (UK 4 = US 0, UK 6 = US 2, etc.)
   david_koma: { "4": 1, "6": 2, "8": 3, "10": 4, "12": 5, "14": 6, "16": 7 },
   victoria_beckham: { "4": 1, "6": 2, "8": 3, "10": 4, "12": 5, "14": 6, "16": 7 },
 };
 
-// Universal size-to-index mapping for cross-scale comparison
-// Maps any size system to a normalized 0-based position (US numeric as baseline)
 const UNIVERSAL_SIZE_MAP: Record<string, number> = {
-  // US numeric
   "00": 0, "0": 1, "2": 2, "4": 3, "6": 4, "8": 5, "10": 6, "12": 7, "14": 8, "16": 9, "18": 10, "20": 11,
-  // US letter
   "XXXS": 0, "XXS": 1, "XS": 2, "S": 3, "M": 4, "L": 6, "XL": 7, "2X": 9, "3X": 10, "4X": 11,
-  // EU/IT numeric
   "34": 0, "36": 1, "38": 2, "40": 3, "42": 4, "44": 5, "46": 6, "48": 7,
-  // Denim waist sizes (mapped to universal index)
   "22": 0, "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9, "33": 10,
 };
 
 function getUniversalIndex(size: string, brandKey?: string): number {
   const upper = size.toUpperCase().trim();
-  // Check brand-specific mapping first
   if (brandKey && BRAND_SCALE_MAPS[brandKey]) {
     const brandIdx = BRAND_SCALE_MAPS[brandKey][upper];
     if (brandIdx !== undefined) return brandIdx;
   }
   if (UNIVERSAL_SIZE_MAP[upper] !== undefined) return UNIVERSAL_SIZE_MAP[upper];
-  // Try parsing as number for unknown numeric sizes
   const num = parseFloat(upper);
   if (!isNaN(num)) return num;
   return -1;
@@ -212,15 +281,11 @@ function convertToScale(size: string, targetScale: string): string {
   return upper;
 }
 
-// Snap a size to the closest valid size from the target brand's available_sizes
 function snapToAvailableSize(size: string, availableSizes: string[], fitPreference: string, brandKey?: string): string {
   if (!availableSizes.length) return size;
-  
   const upper = size.toUpperCase().trim();
-  // If already valid, return it
   if (availableSizes.map(s => s.toUpperCase()).includes(upper)) return upper;
 
-  // Find closest by universal index (brand-aware)
   const inputIdx = getUniversalIndex(upper, brandKey);
   if (inputIdx === -1) return availableSizes[Math.floor(availableSizes.length / 2)];
 
@@ -241,10 +306,8 @@ function snapToAvailableSize(size: string, availableSizes: string[], fitPreferen
 }
 
 function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetScale: string, availableSizes: string[], anchorBrandKey?: string, targetBrandKey?: string): string {
-  // Get universal index from anchor brand's scale (brand-aware)
   const anchorIdx = getUniversalIndex(anchorSize, anchorBrandKey);
   
-  // If we have available sizes and a valid anchor index, find closest match
   if (availableSizes.length && anchorIdx !== -1) {
     let adjustedIdx = anchorIdx;
     if (fitPreference === "fitted") adjustedIdx -= 1;
@@ -264,7 +327,6 @@ function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetSc
     return bestSize;
   }
 
-  // Legacy fallback: scale conversion
   let resultSize = convertToScale(anchorSize, targetScale);
   if (fitPreference === "fitted") {
     const down = sizeDown(resultSize);
@@ -370,7 +432,6 @@ async function scrapeProductFit(productUrl: string): Promise<string | null> {
   if (!LOVABLE_API_KEY) return null;
 
   try {
-    // Fetch page HTML (timeout 8s to keep function fast)
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     const pageResp = await fetch(productUrl, {
@@ -382,7 +443,6 @@ async function scrapeProductFit(productUrl: string): Promise<string | null> {
     if (!pageResp.ok) return null;
     const html = await pageResp.text();
 
-    // Extract only the relevant text (strip scripts/styles, take first 12k chars)
     const stripped = html
       .replace(/<script[\s\S]*?<\/script>/gi, "")
       .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -450,7 +510,6 @@ async function generateBullets(context: {
 }): Promise<string[]> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) {
-    // Fallback bullets without AI
     return generateFallbackBullets(context);
   }
 
@@ -566,7 +625,6 @@ function generateComparisons(
 ): { brandName: string; size: string; fitTag: string }[] {
   const comparisons: { brandName: string; size: string; fitTag: string }[] = [];
 
-  // Add anchor brands
   for (const anchor of anchorBrands) {
     const anchorIdx = sizeIndex(anchor.size);
     const targetIdx = sizeIndex(recommendedSize);
@@ -582,7 +640,6 @@ function generateComparisons(
     });
   }
 
-  // Add target brand
   comparisons.push({
     brandName: targetBrand,
     size: recommendedSize,
@@ -609,6 +666,7 @@ Deno.serve(async (req) => {
       product_url,
       weight,
       height,
+      debug_mode,
     } = await req.json();
 
     if (!anchor_brands?.length || !target_brand_key) {
@@ -629,7 +687,6 @@ Deno.serve(async (req) => {
       .eq("brand_key", target_brand_key)
       .single();
 
-    // Humanize brand key if no catalog entry: "norma_kamali" → "Norma Kamali"
     const targetDisplayName = targetBrand?.display_name || target_brand_key.split("_").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
     const targetFitTendency = targetBrand?.fit_tendency || null;
     const targetSizeScale = targetBrand?.size_scale || "letter";
@@ -654,6 +711,12 @@ Deno.serve(async (req) => {
     // 4. Determine recommended size
     let recommendedSize: string;
     let fitNotes: string | null = null;
+    let usedFallback = false;
+    let usedEstimated = false;
+    let closestResult: ClosestSizeResult | null = null;
+
+    // Debug trace collectors
+    let anchorMeasurementsUsed: Record<string, MeasurementValue | null> | null = null;
 
     // If weight/height provided, estimate body measurements and use them
     let estimatedMeasurements: Record<string, MeasurementValue> | null = null;
@@ -663,12 +726,12 @@ Deno.serve(async (req) => {
         height || "",
         fit_preference || "true_to_size",
       );
+      if (estimatedMeasurements) usedEstimated = true;
     }
 
     if (targetSizingData?.length && (anchorSizingData?.length || estimatedMeasurements)) {
       let anchorMeasurements: Record<string, MeasurementValue | null> | null = null;
 
-      // Try anchor brand measurements first
       if (anchorSizingData?.length) {
         const anchorBrand = anchor_brands[0];
         const anchorRow = anchorSizingData.find(
@@ -684,7 +747,6 @@ Deno.serve(async (req) => {
       // Blend estimated measurements with anchor measurements
       if (estimatedMeasurements) {
         if (anchorMeasurements) {
-          // Merge: anchor takes priority, estimated fills gaps
           for (const [k, v] of Object.entries(estimatedMeasurements)) {
             if (!anchorMeasurements[k]) {
               anchorMeasurements[k] = v;
@@ -695,41 +757,74 @@ Deno.serve(async (req) => {
         }
       }
 
+      anchorMeasurementsUsed = anchorMeasurements;
+
       if (anchorMeasurements) {
-        const result = findClosestSize(
+        closestResult = findClosestSize(
           anchorMeasurements,
           targetSizingData as SizingRow[],
           fit_preference || "true_to_size",
           category
         );
-        if (result) {
-          recommendedSize = convertToScale(result.size, targetSizeScale);
-          fitNotes = result.fitNotes;
+        if (closestResult) {
+          recommendedSize = convertToScale(closestResult.size, targetSizeScale);
+          fitNotes = closestResult.fitNotes;
         } else {
+          usedFallback = true;
           recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);
         }
       } else {
+        usedFallback = true;
         recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);
       }
     } else {
+      usedFallback = true;
       recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);
     }
 
-    // Detect denim scale: if available sizes are in the 22-35 waist range
+    // Detect denim scale
     const isDenimScale = availableSizes.length > 0 && availableSizes.every(s => {
       const n = parseInt(s, 10);
       return !isNaN(n) && n >= 22 && n <= 40;
     });
 
-    // If denim scale detected but we produced a letter/standard size, re-map
     if (isDenimScale && isLetterSize(recommendedSize)) {
-      // Convert letter → universal index → closest denim size
       recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
     }
 
-    // Final snap: ensure recommendedSize is one the target brand actually sells
+    // Final snap
     if (availableSizes.length) {
       recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
+    }
+
+    // ── Confidence scoring ──────────────────────────────────────
+    const confidence = computeConfidence(
+      anchorMeasurementsUsed,
+      targetSizingData as SizingRow[] | null,
+      closestResult?.bestScore ?? null,
+      closestResult?.matchedKeys ?? 0,
+      closestResult?.totalKeys ?? 0,
+      usedFallback,
+      usedEstimated,
+    );
+
+    // ── XXS prevention on low confidence ────────────────────────
+    const isLowConfidence = confidence.score < 50;
+    const isXXSDefault = recommendedSize.toUpperCase() === "XXS" || recommendedSize.toUpperCase() === "XXXS";
+    let needMoreInfo = false;
+
+    if (isLowConfidence && isXXSDefault) {
+      // Don't default to XXS when we're not confident — bump to XS
+      const xsAvailable = availableSizes.map(s => s.toUpperCase()).includes("XS");
+      if (xsAvailable) {
+        recommendedSize = "XS";
+        confidence.reasons.push("Avoided XXS default — low confidence, bumped to XS");
+      }
+    }
+
+    if (isLowConfidence) {
+      needMoreInfo = true;
+      console.warn(`[LOW_CONFIDENCE] score=${confidence.score} brand=${target_brand_key} category=${category} reasons=${confidence.reasons.join("; ")}`);
     }
 
     // 5. Scrape product-specific fit info if URL provided
@@ -749,7 +844,7 @@ Deno.serve(async (req) => {
       productFitSummary,
     });
 
-    // 6. Generate comparisons
+    // 7. Generate comparisons
     const comparisons = generateComparisons(
       anchor_brands,
       targetDisplayName,
@@ -757,7 +852,7 @@ Deno.serve(async (req) => {
       targetFitTendency,
     );
 
-    // 7. Log recommendation if user is authenticated
+    // 8. Log recommendation if user is authenticated
     let recommendationId: string | null = null;
     if (user_id) {
       const { data: recData } = await supabase
@@ -774,16 +869,62 @@ Deno.serve(async (req) => {
       recommendationId = recData?.id || null;
     }
 
+    // ── Build response ──────────────────────────────────────────
+    const responseBody: Record<string, unknown> = {
+      size: recommendedSize,
+      brandName: targetDisplayName,
+      sizeScale: targetSizeScale,
+      bullets,
+      comparisons,
+      productFitSummary,
+      recommendation_id: recommendationId,
+      confidence: {
+        score: confidence.score,
+        reasons: confidence.reasons,
+        matchMethod: confidence.matchMethod,
+      },
+      needMoreInfo,
+    };
+
+    // Include debug trace only when requested
+    if (debug_mode) {
+      const anchorMids: Record<string, number> = {};
+      if (anchorMeasurementsUsed) {
+        const keys = getMeasurementKeys(category);
+        for (const k of keys) {
+          const mid = getMidpoint(anchorMeasurementsUsed[k]);
+          if (mid !== null) anchorMids[k] = mid;
+        }
+      }
+
+      responseBody.debug = {
+        detectedCategory: category,
+        anchorBrand: anchor_brands[0]?.displayName || anchor_brands[0]?.brandKey,
+        anchorSize: anchor_brands[0]?.size,
+        anchorMeasurements: anchorMids,
+        targetBrandKey: target_brand_key,
+        targetBrandDisplayName: targetDisplayName,
+        targetSizeScale,
+        availableSizes,
+        fitPreference: fit_preference || "true_to_size",
+        targetFitTendency,
+        isDenimScale,
+        usedFallback,
+        usedEstimatedMeasurements: usedEstimated,
+        targetRowUsed: closestResult?.targetRowUsed
+          ? {
+              size_label: closestResult.targetRowUsed.size_label,
+              measurements: closestResult.targetRowUsed.measurements,
+              fit_notes: closestResult.targetRowUsed.fit_notes,
+            }
+          : null,
+        allSizeScores: closestResult?.allScores || [],
+        comparisonLogic: comparisons.map(c => `${c.brandName} ${c.size} → ${c.fitTag}`),
+      };
+    }
+
     return new Response(
-      JSON.stringify({
-        size: recommendedSize,
-        brandName: targetDisplayName,
-        sizeScale: targetSizeScale,
-        bullets,
-        comparisons,
-        productFitSummary,
-        recommendation_id: recommendationId,
-      }),
+      JSON.stringify(responseBody),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {

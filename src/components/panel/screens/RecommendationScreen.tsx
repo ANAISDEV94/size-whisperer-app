@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Bug } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { SizeRecommendation } from "@/types/panel";
+import DebugPanel from "../DebugPanel";
 
 interface RecommendationScreenProps {
   recommendation: SizeRecommendation;
@@ -11,18 +12,23 @@ interface RecommendationScreenProps {
   onSizeUp: () => void;
   onRecalculate?: (weight: string, height: string) => void;
   isRecalculating?: boolean;
+  debugMode?: boolean;
 }
 
-const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, onRecalculate, isRecalculating }: RecommendationScreenProps) => {
+const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, onRecalculate, isRecalculating, debugMode }: RecommendationScreenProps) => {
   const [boostOpen, setBoostOpen] = useState(false);
   const [weight, setWeight] = useState("");
   const [height, setHeight] = useState("");
+  const [debugOpen, setDebugOpen] = useState(false);
 
   const handleRecalculate = () => {
     if (onRecalculate && (weight || height)) {
       onRecalculate(weight, height);
     }
   };
+
+  const hasConfidence = !!recommendation.confidence;
+  const confidenceScore = recommendation.confidence?.score ?? 100;
 
   return (
     <div className="flex flex-col flex-1 px-5 py-6 overflow-y-auto">
@@ -36,6 +42,23 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, on
         <p className="text-xs text-muted-foreground mt-1">
           for {recommendation.brandName}
         </p>
+        {/* Confidence badge */}
+        {hasConfidence && (
+          <div className="mt-2 flex items-center justify-center gap-1.5">
+            <span
+              className={`inline-block w-2 h-2 rounded-full ${
+                confidenceScore >= 70
+                  ? "bg-green-500"
+                  : confidenceScore >= 50
+                    ? "bg-yellow-500"
+                    : "bg-red-500"
+              }`}
+            />
+            <span className="text-[10px] text-muted-foreground">
+              {confidenceScore}% confidence
+            </span>
+          </div>
+        )}
       </div>
 
       {/* WHY THIS SIZE — always expanded */}
@@ -124,6 +147,26 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, on
           </Button>
         </CollapsibleContent>
       </Collapsible>
+
+      {/* Debug mode panel */}
+      {debugMode && recommendation.debug && recommendation.confidence && (
+        <Collapsible open={debugOpen} onOpenChange={setDebugOpen} className="mt-4">
+          <CollapsibleTrigger className="flex items-center justify-between w-full py-2 text-left">
+            <span className="text-xs text-primary flex items-center gap-1.5">
+              <Bug className="w-3.5 h-3.5" />
+              Debug trace
+            </span>
+            {debugOpen ? (
+              <ChevronUp className="w-4 h-4 text-primary" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-primary" />
+            )}
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <DebugPanel debug={recommendation.debug} confidence={recommendation.confidence} />
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       <p className="text-[9px] text-muted-foreground text-center mt-auto pt-4 leading-relaxed">
         Sizing insights are based on aggregated public product data and shopper patterns.
