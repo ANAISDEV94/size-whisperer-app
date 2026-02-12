@@ -252,7 +252,11 @@ const ExtensionPanel = () => {
           height: "100%",
         }}
       >
-        <PanelHeader onClose={() => {}} />
+        <PanelHeader onClose={() => {
+          if (window.parent !== window) {
+            window.parent.postMessage({ type: "ALTAANA_PANEL_RESIZE", mode: "widget" }, "*");
+          }
+        }} />
         {renderScreen()}
       </div>
     );

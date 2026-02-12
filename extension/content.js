@@ -195,7 +195,7 @@ function injectPanel(brandKey) {
   log("Detected category:", category);
 
   const productUrl = encodeURIComponent(location.href);
-  const iframeSrc = `${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}`;
+  const iframeSrc = `${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}&source=extension`;
 
   // ── 1. Root container ──────────────────────────────────────────
   const root = document.createElement("div");
@@ -282,7 +282,7 @@ function injectPanel(brandKey) {
     height: 0;
     border: none;
     z-index: 2147483647;
-    background: transparent;
+    background: #0D0D0D;
     pointer-events: none;
     overflow: hidden;
   `;
