@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { PanelState, UserProfile, SizeRecommendation } from "@/types/panel";
 import { useAuth } from "@/hooks/useAuth";
@@ -24,7 +24,7 @@ function useTargetBrand() {
   }, []);
 }
 
-// Size offset helpers — respect the target brand's scale
+// Size offset helpers
 const NUMERIC_ORDER = ["00", "0", "2", "4", "6", "8", "10", "12", "14", "16", "18", "20"];
 const LETTER_ORDER = ["XXXS", "XXS", "XS", "S", "M", "L", "XL", "2X", "3X", "4X"];
 
@@ -46,12 +46,10 @@ const ExtensionPanel = () => {
   const { cached, save: saveConfirmation } = useConfirmationMemory(target.brandKey, target.productUrl);
 
   const [isOpen, setIsOpen] = useState(false);
-  const [showAuth, setShowAuth] = useState(false);
   const [panelState, setPanelState] = useState<PanelState>(cached ? "confirmed" : "profile");
   const [, setProfile] = useState<UserProfile | null>(null);
   const [confirmedSize, setConfirmedSize] = useState<string | null>(cached?.size || null);
 
-  // Check for guest session flag
   const isGuest = typeof window !== 'undefined' && localStorage.getItem('altaana_guest_session') === 'true';
 
   const notifyParentResize = useCallback((mode: "panel" | "widget") => {
@@ -61,28 +59,25 @@ const ExtensionPanel = () => {
   }, []);
 
   const handleOpen = useCallback(() => {
+    // Always open the single shell; set initial screen based on auth state
     if (!user && !isGuest) {
-      setShowAuth(true);
-      notifyParentResize("panel");
+      setPanelState("auth");
     } else {
-      setIsOpen(true);
-      notifyParentResize("panel");
+      setPanelState(cached ? "confirmed" : "profile");
     }
-  }, [user, isGuest, notifyParentResize]);
+    setIsOpen(true);
+    notifyParentResize("panel");
+  }, [user, isGuest, cached, notifyParentResize]);
 
   const handleClose = useCallback(() => {
     setIsOpen(false);
-    setShowAuth(false);
     notifyParentResize("widget");
   }, [notifyParentResize]);
 
   const handleAuthComplete = useCallback(() => {
-    setShowAuth(false);
-    setIsOpen(true);
     setPanelState("profile");
   }, []);
 
-  // "Continue without saving" — persist guest flag
   const handleContinueWithout = useCallback(() => {
     localStorage.setItem('altaana_guest_session', 'true');
     handleAuthComplete();
@@ -172,7 +167,6 @@ const ExtensionPanel = () => {
     console.log("Go to size selector — scroll to size selector");
   }, []);
 
-  // Build confirmed recommendation with adjusted size
   const confirmedRecommendation: SizeRecommendation | null =
     recommendation
       ? { ...recommendation, size: confirmedSize || recommendation.size }
@@ -182,14 +176,24 @@ const ExtensionPanel = () => {
 
   const renderScreen = () => {
     switch (panelState) {
+      case "auth":
+        return (
+          <AuthScreen
+            key="auth"
+            onGoogleSignIn={handleGoogleSignIn}
+            onEmailSignIn={handleEmailSignIn}
+            onEmailSignUp={handleEmailSignUp}
+            onContinueWithout={handleContinueWithout}
+          />
+        );
       case "profile":
-        return <ProfileScreen onSave={handleProfileSave} user={user} />;
+        return <ProfileScreen key="profile" onSave={handleProfileSave} user={user} />;
       case "analyzing":
-        return <AnalyzingScreen />;
+        return <AnalyzingScreen key="analyzing" />;
       case "recommendation":
         if (recError) {
           return (
-            <div className="flex flex-col flex-1 px-5 py-6 items-center justify-center">
+            <div key="rec-error" className="flex flex-col flex-1 px-5 py-6 items-center justify-center">
               <p className="text-sm text-destructive mb-4">Something went wrong generating your recommendation.</p>
               <button onClick={() => setPanelState("profile")} className="text-xs text-primary underline">
                 Try again
@@ -198,10 +202,11 @@ const ExtensionPanel = () => {
           );
         }
         if (!recommendation) {
-          return <AnalyzingScreen />;
+          return <AnalyzingScreen key="analyzing-fallback" />;
         }
         return (
           <RecommendationScreen
+            key="recommendation"
             recommendation={recommendation}
             onSizeDown={handleSizeDown}
             onKeep={handleKeep}
@@ -214,6 +219,7 @@ const ExtensionPanel = () => {
         if (!confirmedRecommendation) return null;
         return (
           <ConfirmedScreen
+            key="confirmed"
             recommendation={confirmedRecommendation}
             onAddToCart={handleAddToCart}
           />
@@ -227,18 +233,8 @@ const ExtensionPanel = () => {
 
   return (
     <>
-      {showAuth && (
-        <AuthScreen
-          onGoogleSignIn={handleGoogleSignIn}
-          onEmailSignIn={handleEmailSignIn}
-          onEmailSignUp={handleEmailSignUp}
-          onContinueWithout={handleContinueWithout}
-          onClose={handleClose}
-        />
-      )}
-
       <AnimatePresence>
-        {!isOpen && !showAuth && (
+        {!isOpen && (
           <FloatingWidget onClick={handleOpen} />
         )}
       </AnimatePresence>
@@ -263,7 +259,18 @@ const ExtensionPanel = () => {
               }}
             >
               <PanelHeader onClose={handleClose} />
-              {renderScreen()}
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={panelState}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="flex flex-col flex-1 overflow-hidden"
+                >
+                  {renderScreen()}
+                </motion.div>
+              </AnimatePresence>
             </motion.div>
           </div>
         )}
