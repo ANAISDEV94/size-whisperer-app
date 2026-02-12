@@ -2,14 +2,11 @@
 html.embedded,
 html.embedded body,
 html.embedded body #root {
-  background: transparent !important;
-  background-color: transparent !important;
-  min-height: 0 !important;
+  background: #0A0909 !important;
+  background-color: #0A0909 !important;
+  min-height: 100vh !important;
+  height: 100% !important;
   overflow: hidden !important;
-}
-
-html.embedded body #root > div {
-  background: transparent !important;
 }
 
 @tailwind base;
