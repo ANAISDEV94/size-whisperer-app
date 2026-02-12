@@ -1,9 +1,12 @@
-import { useEffect } from "react";
 import ExtensionPanel from "@/components/panel/ExtensionPanel";
 
-const isEmbedded = window.location !== window.parent.location;
+const params = new URLSearchParams(window.location.search);
+const isEmbedded =
+  window.location !== window.parent.location ||
+  params.get("embedded") === "1" ||
+  params.get("source") === "extension";
 
-// Add embedded class to html + body for transparent background
+// Add embedded class to html + body for solid dark background
 if (isEmbedded) {
   document.documentElement.classList.add("embedded");
   document.body.classList.add("embedded");
