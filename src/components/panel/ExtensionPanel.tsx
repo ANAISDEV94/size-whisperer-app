@@ -54,18 +54,27 @@ const ExtensionPanel = () => {
   // Check for guest session flag
   const isGuest = typeof window !== 'undefined' && localStorage.getItem('altaana_guest_session') === 'true';
 
+  const notifyParentResize = useCallback((mode: "panel" | "widget") => {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: "ALTAANA_PANEL_RESIZE", mode }, "*");
+    }
+  }, []);
+
   const handleOpen = useCallback(() => {
     if (!user && !isGuest) {
       setShowAuth(true);
+      notifyParentResize("panel");
     } else {
       setIsOpen(true);
+      notifyParentResize("panel");
     }
-  }, [user, isGuest]);
+  }, [user, isGuest, notifyParentResize]);
 
   const handleClose = useCallback(() => {
     setIsOpen(false);
     setShowAuth(false);
-  }, []);
+    notifyParentResize("widget");
+  }, [notifyParentResize]);
 
   const handleAuthComplete = useCallback(() => {
     setShowAuth(false);

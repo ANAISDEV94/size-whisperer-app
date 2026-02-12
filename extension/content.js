@@ -8,7 +8,6 @@
 const PANEL_ORIGIN = "https://size-whisperer-app.lovable.app";
 
 // ── Domain → brand key mapping ────────────────────────────────────
-// Brands that share revolve.com are handled separately via URL path.
 const DOMAIN_TO_BRAND = {
   "shopcsb.com": "csb",
   "7forallmankind.com": "seven_for_all_mankind",
@@ -47,7 +46,6 @@ const DOMAIN_TO_BRAND = {
   "andorcollective.com": "and_or_collective",
 };
 
-// Revolve hosts multiple brands – detect from URL path or breadcrumb brand name
 const REVOLVE_PATH_BRANDS = {
   "/csb/": "csb",
   "/helsa/": "helsa",
@@ -76,23 +74,22 @@ const CATEGORY_KEYWORDS = {
   activewear: ["sports-bra", "workout", "active", "yoga"],
 };
 
+// ── Widget dimensions (must match FloatingWidget.tsx) ─────────────
+const WIDGET_WIDTH = 180;
+const WIDGET_HEIGHT = 41;
+const PANEL_IFRAME_WIDTH = 440;
+
 function detectBrandFromDOM() {
-  // Revolve PDP: brand name is in a specific element above the product title
-  // Target only PDP-specific selectors, NOT navigation elements
   const pdpSelectors = [
-    // Revolve PDP brand selectors (very specific to product detail pages)
     '.product-details .brand-name a',
     '.product-details .product-brand a',
     '.pdp-brand a',
     '.product-brand__link',
-    // Revolve uses a specific designer link pattern on PDP
     '.product-details a[href*="/r/br/"]',
     '.product-name a[href*="/br/"]',
-    // Schema.org markup (very reliable when present)
     '[itemprop="brand"] [itemprop="name"]',
     'meta[itemprop="brand"]',
     '[itemprop="brand"]',
-    // Generic PDP brand selectors (only inside product detail containers)
     '.product-detail .brand-name',
     '.product-info .brand-name',
     '.pdp-header .brand-name',
@@ -123,40 +120,32 @@ function detectBrandFromDOM() {
 function detectBrand() {
   const hostname = location.hostname.replace(/^www\./, "");
 
-  // Check exact hostname first (handles subdomains like us.balmain.com)
   if (DOMAIN_TO_BRAND[hostname]) {
     return DOMAIN_TO_BRAND[hostname];
   }
 
-  // Check if hostname ends with a known domain
   for (const [domain, brandKey] of Object.entries(DOMAIN_TO_BRAND)) {
     if (hostname === domain || hostname.endsWith("." + domain)) {
       return brandKey;
     }
   }
 
-  // Revolve: detect brand from URL path or DOM
   if (hostname.includes("revolve.com")) {
     const path = location.pathname.toLowerCase();
-    // Check known brand paths first
     for (const [prefix, brandKey] of Object.entries(REVOLVE_PATH_BRANDS)) {
       if (path.includes(prefix)) return brandKey;
     }
 
-    // Try scraping brand name from the page DOM
     const domBrand = detectBrandFromDOM();
     if (domBrand) {
-      // Convert display name to slug: "Norma Kamali" → "norma_kamali"
       const slug = domBrand.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
       console.log(`[Altaana] Revolve brand from DOM: "${domBrand}" → ${slug}`);
-      // Skip generic words that aren't brand names
       const skipWords = ["new", "sale", "clothing", "dresses", "tops", "bottoms", "shoes", "accessories", "designers", "beauty", "womens", "mens"];
       if (!skipWords.includes(slug)) {
         return slug;
       }
     }
 
-    // Try URL path as last resort, but skip common non-brand segments
     const brandMatch = path.match(/^\/([a-z0-9-]+)\//);
     if (brandMatch) {
       const segment = brandMatch[1];
@@ -180,22 +169,18 @@ function inferCategory() {
       if (path.includes(kw)) return category;
     }
   }
-  return "tops"; // default fallback
+  return "tops";
 }
 
 function isProductPage() {
-  // Heuristic: product pages typically have /product/, /dp/, or long slug paths
   const path = location.pathname;
   if (/\/(product|dp|p|item|shop)\//i.test(path)) return true;
-  // Revolve PDP pattern: /r/dp.jsp or similar with product detail
   if (/dp\.jsp/i.test(path)) return true;
-  // Fallback: if path has 3+ segments it's likely a PDP
   const segments = path.split("/").filter(Boolean);
   return segments.length >= 2;
 }
 
 function injectPanel(brandKey) {
-  // Don't inject twice
   if (document.getElementById("altaana-panel-frame")) return;
 
   const category = inferCategory();
@@ -206,24 +191,21 @@ function injectPanel(brandKey) {
   iframe.id = "altaana-panel-frame";
   iframe.src = iframeSrc;
   iframe.allow = "clipboard-write";
+
+  // Start in WIDGET mode: small iframe covering only the widget pill
   iframe.style.cssText = `
     position: fixed;
-    top: 0;
+    top: 50%;
     right: 0;
-    width: 440px;
-    height: 100vh;
+    width: ${WIDGET_WIDTH}px;
+    height: ${WIDGET_HEIGHT}px;
+    transform: translateY(-50%);
     border: none;
     z-index: 2147483647;
     background: transparent;
-    pointer-events: none;
+    pointer-events: auto;
+    overflow: hidden;
   `;
-
-  // Allow pointer events only on the panel content inside the iframe
-  // The iframe listens for mouse events and toggles pointer-events
-  iframe.addEventListener("load", () => {
-    // Send a message to the iframe to set up pointer-events passthrough
-    iframe.contentWindow?.postMessage({ type: "ALTAANA_INIT_POINTER_EVENTS" }, PANEL_ORIGIN);
-  });
 
   document.body.appendChild(iframe);
   console.log(`[Altaana] Injected panel for brand="${brandKey}" category="${category}"`);
@@ -237,11 +219,23 @@ window.addEventListener("message", (event) => {
     scrollToSizeSelector();
   }
 
-  // Pointer events passthrough: iframe tells us when mouse is over interactive content
-  if (event.data?.type === "ALTAANA_POINTER_EVENTS") {
+  // Panel tells us when it opens/closes so we can resize the iframe
+  if (event.data?.type === "ALTAANA_PANEL_RESIZE") {
     const iframe = document.getElementById("altaana-panel-frame");
-    if (iframe) {
-      iframe.style.pointerEvents = event.data.enabled ? "auto" : "none";
+    if (!iframe) return;
+
+    if (event.data.mode === "panel") {
+      // Expand iframe to cover the full panel area
+      iframe.style.width = PANEL_IFRAME_WIDTH + "px";
+      iframe.style.height = "100vh";
+      iframe.style.top = "0";
+      iframe.style.transform = "none";
+    } else {
+      // Shrink back to widget size
+      iframe.style.width = WIDGET_WIDTH + "px";
+      iframe.style.height = WIDGET_HEIGHT + "px";
+      iframe.style.top = "50%";
+      iframe.style.transform = "translateY(-50%)";
     }
   }
 });
@@ -249,7 +243,6 @@ window.addEventListener("message", (event) => {
 function scrollToSizeSelector() {
   const hostname = location.hostname.replace(/^www\./, "");
 
-  // Site-specific selector maps (most reliable)
   const SITE_SELECTORS = {
     "tomford.com": ['[data-testid="size-selector"]', '.product-sizes', 'select[name*="size" i]', '.size-selector', '#size-select', '.product-form select'],
     "tomfordfashion.com": ['[data-testid="size-selector"]', '.product-sizes', 'select[name*="size" i]', '.size-selector', '#size-select', '.product-form select'],
@@ -258,7 +251,6 @@ function scrollToSizeSelector() {
     "thereformation.com": ['[class*="size-selector"]', '[data-testid*="size"]'],
   };
 
-  // Find matching site selectors
   let siteSelectors = [];
   for (const [domain, sels] of Object.entries(SITE_SELECTORS)) {
     if (hostname === domain || hostname.endsWith("." + domain)) {
@@ -267,7 +259,6 @@ function scrollToSizeSelector() {
     }
   }
 
-  // Generic selectors (fallback)
   const genericSelectors = [
     '[class*="size-selector"]',
     '[class*="sizeSelector"]',
@@ -282,9 +273,6 @@ function scrollToSizeSelector() {
   ];
 
   const allSelectors = [...siteSelectors, ...genericSelectors];
-
-  // Try CSS selectors first — but only within the main product area
-  // Exclude recommendation/footer sections
   const mainContent = document.querySelector('main, [role="main"], .product-detail, .pdp-container, .product-page') || document.body;
 
   for (const sel of allSelectors) {
@@ -295,12 +283,10 @@ function scrollToSizeSelector() {
     }
   }
 
-  // Text-based search: find "Size" labels near the Add to Cart button
   const addToCartBtn = findAddToCartButton();
   const sizeLabels = findSizeLabels(mainContent);
 
   if (sizeLabels.length > 0) {
-    // If we found an Add to Cart button, prefer the size label closest to it
     let best = sizeLabels[0];
     if (addToCartBtn) {
       const cartRect = addToCartBtn.getBoundingClientRect();
@@ -322,13 +308,9 @@ function scrollToSizeSelector() {
 }
 
 function isInProductArea(el) {
-  // Check element isn't in a recommendations/footer section
   const rect = el.getBoundingClientRect();
   const viewportHeight = window.innerHeight;
-  // If element is more than 3x viewport height down, it's likely in recommendations
   if (rect.top > viewportHeight * 3) return false;
-
-  // Check parent elements for recommendation-like classnames
   let parent = el.closest('[class*="recommend"], [class*="similar"], [class*="also-like"], [class*="you-may"], footer');
   return !parent;
 }
