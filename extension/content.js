@@ -5,6 +5,10 @@
  * from the URL path, and injects the hosted panel UI inside an iframe.
  */
 
+// ── Debug flag – set to false to silence all [Altaana] console logs ──
+const DEBUG = true;
+function log(...args) { if (DEBUG) console.log("[Altaana]", ...args); }
+
 const PANEL_ORIGIN = "https://size-whisperer-app.lovable.app";
 
 // ── Domain → brand key mapping ────────────────────────────────────
@@ -139,7 +143,7 @@ function detectBrand() {
     const domBrand = detectBrandFromDOM();
     if (domBrand) {
       const slug = domBrand.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-      console.log(`[Altaana] Revolve brand from DOM: "${domBrand}" → ${slug}`);
+      log(`Revolve brand from DOM: "${domBrand}" → ${slug}`);
       const skipWords = ["new", "sale", "clothing", "dresses", "tops", "bottoms", "shoes", "accessories", "designers", "beauty", "womens", "mens"];
       if (!skipWords.includes(slug)) {
         return slug;
@@ -152,7 +156,7 @@ function detectBrand() {
       const skipSegments = ["new", "r", "sale", "clothing", "dresses", "dp", "shop", "category", "womens", "mens"];
       if (!skipSegments.includes(segment)) {
         const slug = segment.replace(/-/g, "_");
-        console.log(`[Altaana] Revolve brand slug detected: ${slug}`);
+        log("Revolve brand slug detected:", slug);
         return slug;
       }
     }
@@ -181,40 +185,115 @@ function isProductPage() {
 }
 
 function injectPanel(brandKey) {
-  if (document.getElementById("altaana-panel-frame")) return;
+  // Prevent duplicate injection
+  if (document.getElementById("altaana-root")) {
+    log("Root already exists, skipping injection");
+    return;
+  }
 
   const category = inferCategory();
+  log("Detected category:", category);
+
   const productUrl = encodeURIComponent(location.href);
   const iframeSrc = `${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}`;
 
+  // ── 1. Root container ──────────────────────────────────────────
+  const root = document.createElement("div");
+  root.id = "altaana-root";
+  root.setAttribute("data-altaana-root", "true");
+  root.style.cssText = `
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 0;
+    height: 0;
+    z-index: 2147483647;
+    pointer-events: none;
+  `;
+  document.body.appendChild(root);
+  log("Injected root container #altaana-root");
+
+  // ── 2. Floating widget button ──────────────────────────────────
+  const widget = document.createElement("div");
+  widget.id = "altaana-widget";
+  widget.setAttribute("data-altaana-widget", "true");
+  widget.style.cssText = `
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: ${WIDGET_WIDTH}px;
+    height: ${WIDGET_HEIGHT}px;
+    z-index: 2147483647;
+    pointer-events: auto;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 24px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    user-select: none;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  `;
+  widget.textContent = "Find My Size";
+  widget.addEventListener("mouseenter", () => {
+    widget.style.transform = "scale(1.05)";
+    widget.style.boxShadow = "0 6px 16px rgba(0,0,0,0.3)";
+  });
+  widget.addEventListener("mouseleave", () => {
+    widget.style.transform = "scale(1)";
+    widget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.25)";
+  });
+  widget.addEventListener("click", () => {
+    const frame = document.getElementById("altaana-panel-frame");
+    if (frame) {
+      // Toggle iframe visibility by resizing to panel mode
+      const isPanel = frame.style.height === "100vh";
+      if (isPanel) {
+        frame.style.width = "0px";
+        frame.style.height = "0px";
+        frame.style.pointerEvents = "none";
+      } else {
+        frame.style.width = PANEL_IFRAME_WIDTH + "px";
+        frame.style.height = "100vh";
+        frame.style.pointerEvents = "auto";
+      }
+    }
+  });
+  root.appendChild(widget);
+  log("Injected widget button [data-altaana-widget]");
+
+  // ── 3. Panel iframe (hidden initially) ─────────────────────────
   const iframe = document.createElement("iframe");
   iframe.id = "altaana-panel-frame";
+  iframe.setAttribute("data-altaana-iframe", "true");
   iframe.src = iframeSrc;
   iframe.allow = "clipboard-write";
   iframe.setAttribute("allowtransparency", "true");
-
-  // Start in WIDGET mode: small iframe covering only the widget pill
   iframe.style.cssText = `
     position: fixed;
-    top: 50%;
+    top: 0;
     right: 0;
-    width: ${WIDGET_WIDTH}px;
-    height: ${WIDGET_HEIGHT}px;
-    transform: translateY(-50%);
+    width: 0;
+    height: 0;
     border: none;
     z-index: 2147483647;
     background: transparent;
-    pointer-events: auto;
+    pointer-events: none;
     overflow: hidden;
   `;
-
-  document.body.appendChild(iframe);
-  console.log(`[Altaana] Injected panel for brand="${brandKey}" category="${category}"`);
+  root.appendChild(iframe);
+  log("Injected iframe [data-altaana-iframe], src:", iframeSrc);
 }
 
 // ── Listen for messages from the panel iframe ────────────────────
 window.addEventListener("message", (event) => {
   if (event.origin !== PANEL_ORIGIN) return;
+  log("postMessage received:", event.data?.type);
 
   if (event.data?.type === "ALTAANA_SCROLL_TO_SIZE") {
     scrollToSizeSelector();
@@ -223,23 +302,26 @@ window.addEventListener("message", (event) => {
   // Panel tells us when it opens/closes so we can resize the iframe
   if (event.data?.type === "ALTAANA_PANEL_RESIZE") {
     const iframe = document.getElementById("altaana-panel-frame");
+    const widget = document.getElementById("altaana-widget");
     if (!iframe) return;
 
     if (event.data.mode === "panel") {
-      // Expand iframe to cover the full panel area
       iframe.style.width = PANEL_IFRAME_WIDTH + "px";
       iframe.style.height = "100vh";
       iframe.style.top = "0";
-      iframe.style.transform = "none";
+      iframe.style.pointerEvents = "auto";
+      if (widget) widget.style.display = "none";
+      log("Panel expanded");
     } else {
-      // Shrink back to widget size
-      iframe.style.width = WIDGET_WIDTH + "px";
-      iframe.style.height = WIDGET_HEIGHT + "px";
-      iframe.style.top = "50%";
-      iframe.style.transform = "translateY(-50%)";
+      iframe.style.width = "0px";
+      iframe.style.height = "0px";
+      iframe.style.pointerEvents = "none";
+      if (widget) widget.style.display = "flex";
+      log("Panel collapsed, widget shown");
     }
   }
 });
+log("postMessage listener attached");
 
 function scrollToSizeSelector() {
   const hostname = location.hostname.replace(/^www\./, "");
@@ -305,7 +387,7 @@ function scrollToSizeSelector() {
     return;
   }
 
-  console.log("[Altaana] No size selector found on page");
+  log("No size selector found on page");
 }
 
 function isInProductArea(el) {
@@ -344,21 +426,27 @@ function highlightAndScroll(el) {
   el.style.outline = "2px solid #00CED1";
   el.style.outlineOffset = "4px";
   setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 2500);
-  console.log("[Altaana] Scrolled to size selector");
+  log("Scrolled to size selector");
 }
 
 // ── Main ──────────────────────────────────────────────────────────
 (function main() {
+  log("Content script started");
+  log("URL:", location.href);
+  log("Hostname:", location.hostname);
+
   const brand = detectBrand();
   if (!brand) {
-    console.log("[Altaana] No supported brand detected on", location.hostname);
+    log("No supported brand detected on", location.hostname);
     return;
   }
+  log("Detected brand:", brand);
 
   if (!isProductPage()) {
-    console.log("[Altaana] Not a product page, skipping injection");
+    log("Not a product page, skipping injection");
     return;
   }
 
   injectPanel(brand);
+  log("Injection complete ✓");
 })();
