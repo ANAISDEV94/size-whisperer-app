@@ -103,7 +103,7 @@ const ConfirmedScreen = ({ recommendation, onAddToCart }: ConfirmedScreenProps) 
       )}
 
       <p className="text-[9px] text-muted-foreground text-center mt-4 leading-relaxed border-t border-border pt-4">
-        Sizing insights are based on aggregated public product data and shopper patterns. ALTAANA is not affiliated with or endorsed by the brands shown.
+        Sizing insights are based on aggregated public product data and shopper patterns.
       </p>
     </div>
   );
