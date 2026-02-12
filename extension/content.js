@@ -363,7 +363,6 @@ function highlightAndScroll(el) {
   setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 2500);
   console.log("[Altaana] Scrolled to size selector");
 }
-});
 
 // ── Main ──────────────────────────────────────────────────────────
 (function main() {
