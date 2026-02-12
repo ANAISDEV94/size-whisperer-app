@@ -259,7 +259,7 @@ const ExtensionPanel = () => {
                 borderRadius: 20,
                 background: "linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)",
                 border: "1px solid rgba(0, 206, 209, 0.18)",
-                boxShadow: "0 0 60px rgba(0, 206, 209, 0.08), -8px 0 40px rgba(0, 0, 0, 0.5)",
+                boxShadow: "none",
               }}
             >
               <PanelHeader onClose={handleClose} />

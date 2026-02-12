@@ -126,7 +126,7 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, on
       </Collapsible>
 
       <p className="text-[9px] text-muted-foreground text-center mt-auto pt-4 leading-relaxed">
-        Sizing insights are based on aggregated public product data and shopper patterns. ALTAANA is not affiliated with or endorsed by the brands shown.
+        Sizing insights are based on aggregated public product data and shopper patterns.
       </p>
     </div>
   );

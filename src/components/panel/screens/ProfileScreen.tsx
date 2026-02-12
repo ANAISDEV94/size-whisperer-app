@@ -171,7 +171,7 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
 
   const fitOptions: { label: string; value: FitPreference }[] = [
     { label: "Fitted", value: "fitted" },
-    { label: "True to size", value: "true_to_size" },
+    { label: "Standard", value: "true_to_size" },
     { label: "Relaxed", value: "relaxed" },
   ];
 
