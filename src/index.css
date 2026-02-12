@@ -8,7 +8,7 @@ html.embedded body #root {
   overflow: hidden !important;
 }
 
-html.embedded body #root > * {
+html.embedded body #root > div {
   background: transparent !important;
 }
 
