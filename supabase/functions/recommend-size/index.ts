@@ -672,7 +672,7 @@ Deno.serve(async (req) => {
       if (anchorSizingData?.length) {
         const anchorBrand = anchor_brands[0];
         const anchorRow = anchorSizingData.find(
-          (r: SizingRow & { brand_key: string }) =>
+          (r: { brand_key: any; size_label: any; measurements: any }) =>
             r.brand_key === anchorBrand.brandKey &&
             r.size_label.toUpperCase() === anchorBrand.size.toUpperCase()
         );
