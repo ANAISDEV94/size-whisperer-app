@@ -1,83 +1,78 @@
 
 
-# Fix Plan: Background Transparency, Auth Persistence, Brand Detection, Size Scale, and Size Selector
+# Enhance Recommendation Engine and Add "Boost Accuracy" Feature
 
-## Issues Identified
+## Overview
 
-1. **Background still visible behind the widget/modal** -- The AuthScreen component renders a full-screen overlay (`fixed inset-0` with `bg-black/60`) that fills the entire 440px-wide iframe, creating a visible dark rectangle on the host page even when the panel is closed or only showing the widget.
+This plan addresses three key areas: (1) syncing your Airtable sizing data so the engine actually uses it, (2) ensuring the recommendation logic fully leverages all measurement fields from your database, and (3) adding the "Boost accuracy (optional)" section with weight and height inputs as shown in your wireframe.
 
-2. **Auth screen repeats on every site** -- Supabase auth is stored per-origin. Since the iframe always loads from `size-whisperer-app.lovable.app`, sessions should persist. The likely issue is that Google OAuth redirect flow breaks inside an iframe (popup blocked or redirect fails). Need to ensure auth state is properly checked before showing the auth screen.
+## Current State
 
-3. **Brand detection picks up "New" instead of brand name** -- The Revolve DOM scraping fallback grabs nav category text ("New") instead of the actual brand name from the product detail page.
+- The `sizing_charts` table is **empty** -- the Airtable sync has never been run. This means every recommendation currently falls back to simple scale-conversion logic instead of using your actual measurement data.
+- The recommendation engine already has solid logic for measurement-based matching (bust, waist, hips) and PDP fabric scraping, but it cannot work without data.
+- The "Boost accuracy" feature (weight + height inputs) does not exist yet.
 
-4. **Denim sizes (22-24) getting "Medium" recommendation** -- The category inference from URL keywords may miss denim-specific paths, or the size scale conversion incorrectly maps denim waist sizes to letter sizes.
+## What Will Change
 
-5. **"Go to size selector" doesn't work / scrolls to wrong section** -- The `handleAddToCart` callback in ExtensionPanel.tsx only logs to console. While ConfirmedScreen sends a `postMessage`, the content script's selector list may not match the target site's DOM.
+### 1. Sync Airtable Data
 
----
+Run the existing `sync-airtable` edge function to populate the `sizing_charts` table with all 38 brands' measurement data. This is the critical missing piece -- once the data is in the database, the deterministic measurement-matching logic will activate automatically.
 
-## Planned Changes
+### 2. Update Recommendation Screen UI
 
-### 1. Fix Background Transparency
+Redesign the recommendation screen to match the wireframe:
+- **"WHY THIS SIZE"** section shown as always-visible (not collapsed by default)
+- **"Boost accuracy (optional)"** collapsible section below the Size down/Keep/Size up buttons with:
+  - Weight input (e.g., "140 lbs")
+  - Height input (e.g., "5'6\"")
+  - Helper text: "Helpful for fitted or non-returnable items"
+- When the user provides weight/height and taps a "Recalculate" button, re-run the recommendation with those extra parameters
 
-**Files:** `src/components/panel/screens/AuthScreen.tsx`, `src/components/panel/ExtensionPanel.tsx`
+### 3. Enhance the Backend to Use Weight and Height
 
-- Remove the full-screen backdrop overlay (`fixed inset-0 bg-black/60`) from AuthScreen when running in embedded mode. Instead, render the AuthScreen as a panel (same dimensions as the main panel) without any full-screen overlay.
-- Ensure the iframe container in content.js uses `pointer-events: none` on the iframe itself, with `pointer-events: auto` only on interactive elements inside. This prevents the invisible iframe area from blocking clicks on the host page.
+Update the `recommend-size` edge function to:
+- Accept optional `weight` and `height` parameters
+- Use AI to estimate body measurements from weight + height + fit preference
+- Blend those estimated measurements with the anchor-brand-based approach for a more precise recommendation
+- The AI prompt will factor in the full measurement data from the database (bust ranges, waist ranges, hip ranges, underbust, etc.)
 
-### 2. Fix Auth Persistence Across Sites
+### 4. Expand Measurement Matching
 
-**Files:** `src/components/panel/ExtensionPanel.tsx`, `src/hooks/useAuth.ts`
-
-- The iframe always loads from the same origin (`size-whisperer-app.lovable.app`), so Supabase sessions should persist across different host sites automatically.
-- Add logic: if a user session already exists when the widget is clicked, skip the auth screen entirely and go straight to the profile or analyzing screen.
-- For "Continue without saving" (guest) users: store a flag in `localStorage` so they aren't prompted for auth again during the browser session.
-
-### 3. Fix Brand Detection on Revolve
-
-**File:** `extension/content.js`
-
-- Improve `detectBrandFromDOM()` to target Revolve-specific brand selectors more precisely (e.g., the brand link near the product title on the PDP, not navigation categories).
-- Expand the `skipWords` list to filter out common navigation terms like "new", "sale", "clothing", etc.
-- Add a more targeted Revolve PDP selector: look for the brand name element that appears directly above/near the product title on Revolve product pages.
-
-### 4. Fix Denim Size Scale Mismatch
-
-**Files:** `extension/content.js`, `supabase/functions/recommend-size/index.ts`
-
-- Update the `inferCategory()` function in content.js to detect denim from URL patterns (e.g., URLs containing "jean", "denim", or waist-size numbers).
-- In the edge function, when the target brand's available sizes are denim waist sizes (22-35), ensure the recommendation snaps to a denim size rather than converting to letter scale. The `snapToAvailableSize` function should already handle this, but the category being passed may be wrong (defaulting to "tops" instead of "bottoms").
-- Add a heuristic: if available_sizes contains numbers in the 22-35 range, treat as denim scale regardless of category parameter.
-
-### 5. Fix "Go to Size Selector" Button
-
-**Files:** `src/components/panel/screens/ConfirmedScreen.tsx`, `extension/content.js`
-
-- The ConfirmedScreen already sends `postMessage` to parent, but the content script needs better site-specific selectors.
-- Add Tom Ford-specific selectors (e.g., `select[name*="size"]`, `.product-size-select`).
-- Add a smarter fallback: search for elements containing text "SIZE" (case-insensitive) near the top of the product info area, filtering out footer/recommendation sections.
-- Add a "no size selector found" graceful handling: if nothing is found, show a brief toast or message instead of doing nothing.
+Update the `findClosestSize` function to consider additional measurement fields beyond bust/waist/hips when available:
+- `underbust` (important for sports bras, bodysuits -- Lululemon, Alo, CSB)
+- `thigh` and `rise` (important for denim/jeans)
+- `shoulders` and `sleeve_length` (useful for fitted tops/jackets)
+- Weight each measurement by relevance to the garment category
 
 ---
 
 ## Technical Details
 
-### AuthScreen Changes
-- Detect embedded mode via `window.location !== window.parent.location`
-- In embedded mode: render AuthScreen as a panel-sized card (404x733) positioned right, without the full-screen overlay
-- In non-embedded mode: keep existing behavior
+### Files to modify:
 
-### Guest Session Persistence
-- On "Continue without saving": set `localStorage.setItem("altaana_guest_session", "true")`
-- In `ExtensionPanel.handleOpen`: check for guest session flag OR existing auth user -- skip auth screen if either exists
-- Clear guest flag on explicit sign-out
+**`src/components/panel/screens/RecommendationScreen.tsx`**
+- Change "Why this size" from collapsed-by-default to always-expanded
+- Add "Boost accuracy (optional)" collapsible section with weight/height text inputs
+- Add "Recalculate" button that triggers a re-recommendation with the new inputs
+- Style to match wireframe (teal link text, dark input fields)
 
-### Content Script Brand Detection
-- Add Revolve-specific selectors targeting `.product-brand a` or the brand name link that appears above the product title
-- Add more skip words: "new", "sale", "best_sellers", "what_s_new"
+**`src/types/panel.ts`**
+- Add optional `weight` and `height` fields to `UserProfile` or create a new `BoostAccuracyData` type
 
-### Size Selector Improvements  
-- Add per-site selector maps for known brand sites (Tom Ford, Revolve, Alo Yoga, etc.)
-- Use a scoring system: prefer elements near the "Add to cart" button or product price area
-- Limit scroll target search to the main product content area (not recommendations/footer)
+**`src/hooks/useRecommendation.ts`**
+- Add optional `weight` and `height` parameters to `fetchRecommendation`
+
+**`src/components/panel/ExtensionPanel.tsx`**
+- Wire up the boost accuracy recalculation flow
+- Pass recalculate handler to RecommendationScreen
+
+**`supabase/functions/recommend-size/index.ts`**
+- Accept `weight` and `height` in request body
+- When provided, use AI to estimate bust/waist/hip measurements from weight + height
+- Expand `findClosestSize` keys array to include category-relevant measurements (underbust for bras, thigh/rise for denim, etc.)
+- Add category-to-measurement-priority mapping (e.g., denim prioritizes waist > hips > thigh > rise; tops prioritize bust > waist > shoulders)
+
+### Data sync:
+- Trigger the `sync-airtable` function to populate `sizing_charts` with your Airtable data
+- This is a one-time action that fills the database so the measurement-based engine works
 
