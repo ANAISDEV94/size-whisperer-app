@@ -12,7 +12,7 @@ const FloatingWidget = ({ onClick }: FloatingWidgetProps) => {
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 20 }}
       onClick={onClick}
-      className="fixed right-0 top-1/2 -translate-y-1/2 z-50 flex items-center cursor-pointer"
+      className="flex items-center cursor-pointer"
       style={{
         width: 180,
         height: 41,
