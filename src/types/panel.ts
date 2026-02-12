@@ -17,6 +17,8 @@ export interface AnchorBrand {
 export interface UserProfile {
   anchorBrands: AnchorBrand[];
   fitPreference: FitPreference;
+  weight?: string;
+  height?: string;
 }
 
 export interface SizeRecommendation {

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { SizeRecommendation } from "@/types/panel";
 
 interface RecommendationScreenProps {
@@ -8,10 +9,20 @@ interface RecommendationScreenProps {
   onSizeDown: () => void;
   onKeep: () => void;
   onSizeUp: () => void;
+  onRecalculate?: (weight: string, height: string) => void;
+  isRecalculating?: boolean;
 }
 
-const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp }: RecommendationScreenProps) => {
-  const [whyExpanded, setWhyExpanded] = useState(false);
+const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, onRecalculate, isRecalculating }: RecommendationScreenProps) => {
+  const [boostOpen, setBoostOpen] = useState(false);
+  const [weight, setWeight] = useState("");
+  const [height, setHeight] = useState("");
+
+  const handleRecalculate = () => {
+    if (onRecalculate && (weight || height)) {
+      onRecalculate(weight, height);
+    }
+  };
 
   return (
     <div className="flex flex-col flex-1 px-5 py-6 overflow-y-auto">
@@ -27,19 +38,10 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp }: 
         </p>
       </div>
 
-      <button
-        onClick={() => setWhyExpanded(!whyExpanded)}
-        className="flex items-center justify-between w-full py-3 border-t border-b border-border text-left"
-      >
+      {/* WHY THIS SIZE — always expanded */}
+      <div className="border-t border-b border-border py-3 mb-4">
         <span className="text-xs uppercase tracking-wider text-muted-foreground">Why this size</span>
-        {whyExpanded ? (
-          <ChevronUp className="w-4 h-4 text-muted-foreground" />
-        ) : (
-          <ChevronDown className="w-4 h-4 text-muted-foreground" />
-        )}
-      </button>
-      {whyExpanded && (
-        <ul className="space-y-2 py-4 pl-1">
+        <ul className="space-y-2 pt-3 pl-1">
           {recommendation.bullets.map((bullet, i) => (
             <li key={i} className="flex items-start gap-2 text-xs text-secondary-foreground">
               <span className="text-primary mt-0.5">•</span>
@@ -47,9 +49,10 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp }: 
             </li>
           ))}
         </ul>
-      )}
+      </div>
 
-      <div className="flex gap-2 mt-auto pt-6">
+      {/* Size action buttons */}
+      <div className="flex gap-2">
         <Button
           onClick={onSizeDown}
           variant="outline"
@@ -75,7 +78,54 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp }: 
         </Button>
       </div>
 
-      <p className="text-[9px] text-muted-foreground text-center mt-4 leading-relaxed">
+      {/* Boost Accuracy — collapsible */}
+      <Collapsible open={boostOpen} onOpenChange={setBoostOpen} className="mt-5">
+        <CollapsibleTrigger className="flex items-center justify-between w-full py-2 text-left">
+          <span className="text-xs text-primary">Boost accuracy (optional)</span>
+          {boostOpen ? (
+            <ChevronUp className="w-4 h-4 text-primary" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-primary" />
+          )}
+        </CollapsibleTrigger>
+        <CollapsibleContent className="pt-3 space-y-3">
+          <p className="text-[10px] text-muted-foreground">
+            Helpful for fitted or non-returnable items
+          </p>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 block">Weight</label>
+              <input
+                type="text"
+                placeholder="e.g. 140 lbs"
+                value={weight}
+                onChange={(e) => setWeight(e.target.value)}
+                className="w-full h-9 rounded-md border border-border bg-background/50 px-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 block">Height</label>
+              <input
+                type="text"
+                placeholder={`e.g. 5'6"`}
+                value={height}
+                onChange={(e) => setHeight(e.target.value)}
+                className="w-full h-9 rounded-md border border-border bg-background/50 px-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+          </div>
+          <Button
+            onClick={handleRecalculate}
+            disabled={(!weight && !height) || isRecalculating}
+            className="w-full rounded-full bg-primary text-primary-foreground text-xs"
+            style={{ height: 40 }}
+          >
+            {isRecalculating ? "Recalculating..." : "Recalculate"}
+          </Button>
+        </CollapsibleContent>
+      </Collapsible>
+
+      <p className="text-[9px] text-muted-foreground text-center mt-auto pt-4 leading-relaxed">
         Sizing insights are based on aggregated public product data and shopper patterns. ALTAANA is not affiliated with or endorsed by the brands shown.
       </p>
     </div>
