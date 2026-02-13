@@ -316,7 +316,7 @@ const ProfileScreen = ({ onSave, user }: ProfileScreenProps) => {
         className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-full text-sm mt-auto mx-auto"
         style={{ height: 48.5, width: 334 }}
       >
-        Save my profile
+        Find my size
       </Button>
     </div>
   );
