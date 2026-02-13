@@ -55,13 +55,15 @@ export function useRecommendation(): UseRecommendationReturn {
       if (data?.error) throw new Error(data.error);
 
       setRecommendation({
-        size: data.size,
+        size: data.size || "",
         brandName: data.brandName,
         sizeScale: data.sizeScale || "letter",
-        bullets: data.bullets,
-        comparisons: data.comparisons,
+        bullets: data.bullets || [],
+        comparisons: data.comparisons || [],
         confidence: data.confidence || undefined,
         needMoreInfo: data.needMoreInfo || false,
+        askFor: data.ask_for || undefined,
+        needMoreInfoReason: data.reason || undefined,
         debug: data.debug || undefined,
       });
       setRecommendationId(data.recommendation_id || null);

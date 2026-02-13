@@ -53,6 +53,42 @@ export type Database = {
         }
         Relationships: []
       }
+      low_confidence_logs: {
+        Row: {
+          anchor_brand: string
+          anchor_size: string
+          category: string
+          confidence: number
+          coverage: number
+          created_at: string
+          id: string
+          reason: string
+          target_brand: string
+        }
+        Insert: {
+          anchor_brand: string
+          anchor_size: string
+          category: string
+          confidence: number
+          coverage: number
+          created_at?: string
+          id?: string
+          reason: string
+          target_brand: string
+        }
+        Update: {
+          anchor_brand?: string
+          anchor_size?: string
+          category?: string
+          confidence?: number
+          coverage?: number
+          created_at?: string
+          id?: string
+          reason?: string
+          target_brand?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           anchor_brands: Json | null

@@ -5,19 +5,21 @@ import { Input } from "@/components/ui/input";
 interface NeedMoreInfoScreenProps {
   confidenceScore: number;
   confidenceReasons: string[];
+  askFor: string; // "bust" | "waist"
+  reason: string;
   onSubmitMeasurement: (key: string, value: string) => void;
   isLoading?: boolean;
 }
 
-const MEASUREMENT_OPTIONS = [
-  { key: "bust", label: "Bust", placeholder: "e.g. 34" },
-  { key: "waist", label: "Waist", placeholder: "e.g. 28" },
-  { key: "hips", label: "Hips", placeholder: "e.g. 38" },
-];
+const MEASUREMENT_LABELS: Record<string, { label: string; placeholder: string }> = {
+  bust: { label: "Bust", placeholder: "e.g. 34" },
+  waist: { label: "Waist", placeholder: "e.g. 28" },
+  hips: { label: "Hips", placeholder: "e.g. 38" },
+};
 
-const NeedMoreInfoScreen = ({ confidenceScore, confidenceReasons, onSubmitMeasurement, isLoading }: NeedMoreInfoScreenProps) => {
-  const [selectedKey, setSelectedKey] = useState("bust");
+const NeedMoreInfoScreen = ({ confidenceScore, confidenceReasons, askFor, reason, onSubmitMeasurement, isLoading }: NeedMoreInfoScreenProps) => {
   const [value, setValue] = useState("");
+  const info = MEASUREMENT_LABELS[askFor] || MEASUREMENT_LABELS.bust;
 
   return (
     <div className="flex flex-col flex-1 px-5 py-6 overflow-y-auto">
@@ -27,7 +29,7 @@ const NeedMoreInfoScreen = ({ confidenceScore, confidenceReasons, onSubmitMeasur
         </div>
         <h2 className="font-serif-display text-xl text-foreground mb-1">Need more info</h2>
         <p className="text-xs text-muted-foreground">
-          We couldn't find a confident match (score: {confidenceScore}%). One measurement will help.
+          {reason || `We couldn't find a confident match (score: ${confidenceScore}%).`}
         </p>
       </div>
 
@@ -38,41 +40,32 @@ const NeedMoreInfoScreen = ({ confidenceScore, confidenceReasons, onSubmitMeasur
         ))}
       </div>
 
-      {/* Measurement input */}
+      {/* Single measurement input */}
       <div className="space-y-3">
-        <p className="text-xs text-foreground">Share one measurement to improve accuracy:</p>
+        <p className="text-xs text-foreground">
+          Share your <span className="text-primary font-medium">{info.label.toLowerCase()}</span> measurement to get an accurate recommendation:
+        </p>
 
-        <div className="flex gap-2">
-          {MEASUREMENT_OPTIONS.map((opt) => (
-            <button
-              key={opt.key}
-              onClick={() => setSelectedKey(opt.key)}
-              className={`flex-1 rounded-full text-[10px] py-1.5 border transition-colors ${
-                selectedKey === opt.key
-                  ? "border-primary text-primary bg-primary/10"
-                  : "border-border text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 block">
+            {info.label} (inches)
+          </label>
+          <Input
+            type="text"
+            placeholder={info.placeholder}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="h-10 rounded-md border-border bg-background/50 text-sm text-foreground placeholder:text-muted-foreground"
+          />
         </div>
 
-        <Input
-          type="text"
-          placeholder={MEASUREMENT_OPTIONS.find(o => o.key === selectedKey)?.placeholder}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="h-10 rounded-md border-border bg-background/50 text-sm text-foreground placeholder:text-muted-foreground"
-        />
-
         <Button
-          onClick={() => onSubmitMeasurement(selectedKey, value)}
+          onClick={() => onSubmitMeasurement(askFor, value)}
           disabled={!value.trim() || isLoading}
           className="w-full rounded-full bg-primary text-primary-foreground text-xs"
           style={{ height: 48.5 }}
         >
-          {isLoading ? "Recalculating..." : "Get recommendation"}
+          {isLoading ? "Recalculating..." : "Recalculate"}
         </Button>
       </div>
 

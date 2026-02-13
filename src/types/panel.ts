@@ -29,6 +29,8 @@ export interface SizeRecommendation {
   comparisons: BrandComparison[];
   confidence?: ConfidenceInfo;
   needMoreInfo?: boolean;
+  askFor?: string;
+  needMoreInfoReason?: string;
   debug?: DebugTrace;
 }
 

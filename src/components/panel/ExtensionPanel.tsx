@@ -222,10 +222,10 @@ const ExtensionPanel = () => {
               key="need-more-info"
               confidenceScore={recommendation.confidence?.score ?? 0}
               confidenceReasons={recommendation.confidence?.reasons ?? []}
+              askFor={recommendation.askFor || "bust"}
+              reason={recommendation.needMoreInfoReason || ""}
               onSubmitMeasurement={async (key, value) => {
                 if (!lastProfile) return;
-                // Re-fetch with the measurement as weight/height proxy
-                // The user provides a direct measurement — pass as height for re-estimation
                 await fetchRecommendation(
                   lastProfile,
                   target.brandKey,
@@ -233,7 +233,7 @@ const ExtensionPanel = () => {
                   user?.id,
                   target.productUrl,
                   undefined,
-                  `${value}" ${key}`, // encode measurement into height field for AI estimation
+                  `${value}" ${key}`,
                 );
               }}
               isLoading={recLoading}
