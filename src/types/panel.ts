@@ -73,6 +73,7 @@ export interface DebugTrace {
   anchorRowChosen?: { sizeLabel: string; measurements: Record<string, unknown> | null } | null;
   targetSizeTypeSearched?: string;
   conversionFallbackUsed?: boolean;
+  categoryFallbackUsed?: boolean;
   sizeSystemFilterUsed?: string;
   targetRowsBeforeSystemFilter?: number;
   targetRowsAfterSystemFilter?: number;

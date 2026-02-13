@@ -217,6 +217,7 @@ const CATEGORY_ALIAS_MAP: Record<string, string> = {
   top: "tops",
   bottoms: "bottoms",
   bottom: "bottoms",
+  pants: "bottoms",
   denim: "denim",
   jeans: "denim",
   dresses: "dresses",
@@ -224,9 +225,12 @@ const CATEGORY_ALIAS_MAP: Record<string, string> = {
   swim: "swim",
   swimwear: "swim",
   "one-piece swimsuits": "swim",
+  "one_piece_swimsuits": "swim",
   "sports bras": "sports_bras",
   "sports_bras": "sports_bras",
+  bras: "sports_bras",
   outerwear: "outerwear",
+  jackets: "outerwear",
   shorts: "bottoms",
   skirts: "bottoms",
   bodysuits: "bodysuits",
@@ -234,7 +238,9 @@ const CATEGORY_ALIAS_MAP: Record<string, string> = {
 
 function normalizeCategory(raw: string): string {
   const lower = raw.toLowerCase().trim();
-  return CATEGORY_ALIAS_MAP[lower] || lower;
+  if (CATEGORY_ALIAS_MAP[lower]) return CATEGORY_ALIAS_MAP[lower];
+  // Convert any remaining spaces/punctuation to underscores for consistency
+  return lower.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 }
 
 // Category-to-measurement priority mapping
@@ -923,19 +929,56 @@ Deno.serve(async (req) => {
     // 2. Normalize category
     const detectedCategoryRaw = target_category || "tops";
     const category = normalizeCategory(detectedCategoryRaw);
-    const { data: targetSizingDataRaw } = await supabase
+
+    // 2b. Also build a list of possible raw category strings that might exist in DB
+    // (the DB may have un-normalized values like "sports bras", "dresses ", "pants")
+    const categoryVariants = new Set<string>([category]);
+    // Add the raw input too (lowercased, trimmed)
+    const rawLower = detectedCategoryRaw.toLowerCase().trim();
+    categoryVariants.add(rawLower);
+    // Add common DB variants
+    const REVERSE_CATEGORY_MAP: Record<string, string[]> = {
+      tops: ["tops"],
+      bottoms: ["bottoms", "pants", "shorts", "skirts"],
+      denim: ["denim", "jeans"],
+      dresses: ["dresses", "dress", "dresses "],
+      swim: ["swim", "swimwear", "one-piece swimsuits"],
+      sports_bras: ["sports bras", "sports_bras", "bras"],
+      outerwear: ["outerwear", "jackets"],
+      bodysuits: ["bodysuits"],
+    };
+    if (REVERSE_CATEGORY_MAP[category]) {
+      for (const v of REVERSE_CATEGORY_MAP[category]) categoryVariants.add(v);
+    }
+
+    // Query target sizing data: try normalized + variants
+    let targetSizingDataRaw: Array<{ size_label: string; measurements: Record<string, unknown> | null; fit_notes: string | null; size_scale: string }> = [];
+    const { data: targetDataExact } = await supabase
       .from("sizing_charts")
       .select("size_label, measurements, fit_notes, size_scale")
       .eq("brand_key", target_brand_key)
-      .eq("category", category);
+      .in("category", [...categoryVariants]);
+
+    targetSizingDataRaw = targetDataExact || [];
+
+    // Brand-only fallback if no rows matched ANY category variant
+    let categoryFallbackUsed = false;
+    if (targetSizingDataRaw.length === 0) {
+      const { data: targetDataAll } = await supabase
+        .from("sizing_charts")
+        .select("size_label, measurements, fit_notes, size_scale")
+        .eq("brand_key", target_brand_key);
+      targetSizingDataRaw = targetDataAll || [];
+      categoryFallbackUsed = true;
+    }
 
     // Filter target rows: prefer same size_type, classify each row
-    const allTargetRows = targetSizingDataRaw || [];
+    const allTargetRows = targetSizingDataRaw;
     const targetRowsBeforeFilter = allTargetRows.length;
 
     // First try: rows whose size_label classifies as compatible with anchor size_type
     let targetSizingData = allTargetRows.filter(
-      (r: { size_label: string }) => sizeTypesCompatible(classifySizeType(r.size_label), anchorSizeType)
+      (r) => sizeTypesCompatible(classifySizeType(r.size_label), anchorSizeType)
     );
     let targetSizeTypeSearched: string = anchorSizeType;
     let conversionFallbackUsed = false;
@@ -944,7 +987,6 @@ Deno.serve(async (req) => {
     if (targetSizingData.length === 0 && allTargetRows.length > 0) {
       targetSizingData = allTargetRows;
       conversionFallbackUsed = true;
-      // Determine what type we're actually searching
       const firstRowType = classifySizeType(allTargetRows[0].size_label);
       targetSizeTypeSearched = firstRowType;
     }
@@ -952,17 +994,29 @@ Deno.serve(async (req) => {
     const targetRowsAfterFilter = targetSizingData.length;
     const targetRowsFilteredOut = targetRowsBeforeFilter - targetRowsAfterFilter;
 
-    // 3. Fetch anchor brand sizing data — filtered to compatible size type
+    // 3. Fetch anchor brand sizing data — try category variants, then brand-only fallback
     const anchorBrandKeys = anchor_brands.map((a: { brandKey: string }) => a.brandKey);
-    const { data: anchorSizingDataRaw } = await supabase
+    let anchorSizingDataAll: Array<{ brand_key: string; size_label: string; measurements: Record<string, unknown> | null; size_scale: string }> = [];
+    const { data: anchorDataExact } = await supabase
       .from("sizing_charts")
       .select("brand_key, size_label, measurements, size_scale")
       .in("brand_key", anchorBrandKeys)
-      .eq("category", category);
+      .in("category", [...categoryVariants]);
+
+    anchorSizingDataAll = anchorDataExact || [];
+
+    // Brand-only fallback for anchor
+    if (anchorSizingDataAll.length === 0) {
+      const { data: anchorDataAll } = await supabase
+        .from("sizing_charts")
+        .select("brand_key, size_label, measurements, size_scale")
+        .in("brand_key", anchorBrandKeys);
+      anchorSizingDataAll = anchorDataAll || [];
+    }
 
     // Filter anchor rows to same size type only (strict — never mix for anchor)
-    const anchorSizingData = (anchorSizingDataRaw || []).filter(
-      (r: { size_label: string }) => sizeTypesCompatible(classifySizeType(r.size_label), anchorSizeType)
+    const anchorSizingData = anchorSizingDataAll.filter(
+      (r) => sizeTypesCompatible(classifySizeType(r.size_label), anchorSizeType)
     );
 
     // 4. Determine recommended size
@@ -1085,9 +1139,15 @@ Deno.serve(async (req) => {
     }
 
     // ── Confidence scoring ──────────────────────────────────────
-    const matchedKeys = closestResult?.matchedKeys ?? 0;
-    const avgDeviation = closestResult?.bestScore ?? Infinity;
-    const confidence = computeConfidence(matchedKeys, avgDeviation, usedFallback);
+    let confidence: ConfidenceResult;
+    if (isSameBrand) {
+      // Same brand = perfect confidence, no measurement matching needed
+      confidence = { score: 100, reasons: ["Same brand — direct size match"], matchMethod: "measurement", measurementCoverage: 0, avgDeviation: 0 };
+    } else {
+      const matchedKeys = closestResult?.matchedKeys ?? 0;
+      const avgDeviation = closestResult?.bestScore ?? Infinity;
+      confidence = computeConfidence(matchedKeys, avgDeviation, usedFallback);
+    }
 
     // Penalize confidence when conversion fallback was used (cross-system)
     if (conversionFallbackUsed && confidence.score > 0) {
@@ -1317,6 +1377,7 @@ Deno.serve(async (req) => {
         targetRowsBeforeSystemFilter: targetRowsBeforeFilter,
         targetRowsAfterSystemFilter: targetRowsAfterFilter,
         targetRowsFilteredOut,
+        categoryFallbackUsed,
         isDenimScale: anchorSizeType === "denim",
         usedFallback,
         usedEstimatedMeasurements: usedEstimated,
