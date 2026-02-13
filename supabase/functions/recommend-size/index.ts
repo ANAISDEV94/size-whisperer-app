@@ -679,6 +679,7 @@ Deno.serve(async (req) => {
       weight,
       height,
       debug_mode,
+      brand_source,
     } = await req.json();
 
     if (!anchor_brands?.length || !target_brand_key) {
@@ -850,7 +851,14 @@ Deno.serve(async (req) => {
       confidence.reasons.push("Blocked extreme size fallback — confidence below 80%");
     }
 
-    // ── Log low-confidence events to DB ─────────────────────────
+    // Rule 3: brand_source=fallback (Revolve couldn't detect brand) + confidence < 75 → NEED_MORE_INFO
+    if (brand_source === "fallback" && confidence.score < 75 && !needMoreInfo) {
+      needMoreInfo = true;
+      needMoreInfoAskFor = getAskForMeasurement(category);
+      needMoreInfoReason = "Could not confidently identify the brand on this page";
+      confidence.reasons.push("Brand detection fell back — confidence threshold raised to 75%");
+    }
+
     if (needMoreInfo || confidence.score < 65) {
       try {
         await supabase.from("low_confidence_logs").insert({

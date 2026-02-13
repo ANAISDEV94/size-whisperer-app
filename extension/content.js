@@ -68,6 +68,33 @@ const REVOLVE_PATH_BRANDS = {
   "/david-koma/": "david_koma",
 };
 
+// ── Display name → brandKey normalization ─────────────────────────
+// Handles &, +, punctuation, accented chars
+function slugifyBrandName(name) {
+  return name
+    .toLowerCase()
+    .replace(/&/g, "_and_")
+    .replace(/\+/g, "_and_")
+    .replace(/'/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+    .replace(/_+/g, "_");
+}
+
+// ── Revolve-specific DOM brand selectors (ordered by reliability) ─
+const REVOLVE_BRAND_SELECTORS = [
+  // Structured data (most reliable)
+  '[itemprop="brand"] [itemprop="name"]',
+  'meta[itemprop="brand"]',
+  // Revolve-specific PDP selectors
+  '.product-details .brand-name a',
+  '.product-details .product-brand a',
+  '.product-brand__link',
+  'a[href*="/r/br/"]',
+  'a[href*="/br/"]',
+  // JSON-LD fallback handled separately
+];
+
 // ── Category inference from URL path keywords ─────────────────────
 const CATEGORY_KEYWORDS = {
   tops: ["top", "blouse", "shirt", "tee", "tank", "cami", "bodysuit", "sweater", "hoodie", "pullover", "cardigan"],
@@ -84,7 +111,9 @@ const WIDGET_HEIGHT = 41;
 const PANEL_IFRAME_WIDTH = 440;
 
 function detectBrandFromDOM() {
-  const pdpSelectors = [
+  // Strategy 1: Try Revolve-specific selectors first (on Revolve)
+  const isRevolve = location.hostname.replace(/^www\./, "").includes("revolve.com");
+  const selectors = isRevolve ? REVOLVE_BRAND_SELECTORS : [
     '.product-details .brand-name a',
     '.product-details .product-brand a',
     '.pdp-brand a',
@@ -103,64 +132,92 @@ function detectBrandFromDOM() {
     "new", "sale", "clothing", "dresses", "tops", "bottoms", "shoes",
     "accessories", "designers", "beauty", "womens", "mens", "what_s_new",
     "best_sellers", "shop", "home", "view_all", "collections", "brands",
-    "trending", "just_in", "category",
+    "trending", "just_in", "category", "revolve",
   ];
 
-  for (const sel of pdpSelectors) {
+  for (const sel of selectors) {
     const el = document.querySelector(sel);
     if (el) {
       const text = (el.textContent || el.getAttribute("content") || "").trim();
       if (text && text.length > 1 && text.length < 60) {
-        const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+        const slug = slugifyBrandName(text);
         if (!skipWords.includes(slug)) {
+          log("Brand from DOM selector:", sel, "→", text, "→", slug);
           return text;
         }
       }
     }
   }
+
+  // Strategy 2: JSON-LD structured data
+  if (isRevolve) {
+    try {
+      const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+      for (const script of scripts) {
+        const json = JSON.parse(script.textContent);
+        const brand = json?.brand?.name || json?.brand;
+        if (brand && typeof brand === "string" && brand.length > 1) {
+          const slug = slugifyBrandName(brand);
+          if (!skipWords.includes(slug)) {
+            log("Brand from JSON-LD:", brand, "→", slug);
+            return brand;
+          }
+        }
+      }
+    } catch (e) { /* ignore parse errors */ }
+  }
+
   return null;
 }
 
+// Returns { brandKey, brandSource } where brandSource is "domain"|"path"|"dom"|"url_segment"|"fallback"
 function detectBrand() {
   const hostname = location.hostname.replace(/^www\./, "");
 
   if (DOMAIN_TO_BRAND[hostname]) {
-    return DOMAIN_TO_BRAND[hostname];
+    return { brandKey: DOMAIN_TO_BRAND[hostname], brandSource: "domain" };
   }
 
   for (const [domain, brandKey] of Object.entries(DOMAIN_TO_BRAND)) {
     if (hostname === domain || hostname.endsWith("." + domain)) {
-      return brandKey;
+      return { brandKey, brandSource: "domain" };
     }
   }
 
   if (hostname.includes("revolve.com")) {
     const path = location.pathname.toLowerCase();
-    for (const [prefix, brandKey] of Object.entries(REVOLVE_PATH_BRANDS)) {
-      if (path.includes(prefix)) return brandKey;
-    }
 
-    const domBrand = detectBrandFromDOM();
-    if (domBrand) {
-      const slug = domBrand.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-      log(`Revolve brand from DOM: "${domBrand}" → ${slug}`);
-      const skipWords = ["new", "sale", "clothing", "dresses", "tops", "bottoms", "shoes", "accessories", "designers", "beauty", "womens", "mens"];
-      if (!skipWords.includes(slug)) {
-        return slug;
+    // 1. Known path prefix mapping
+    for (const [prefix, brandKey] of Object.entries(REVOLVE_PATH_BRANDS)) {
+      if (path.includes(prefix)) {
+        log("Revolve brand from path prefix:", prefix, "→", brandKey);
+        return { brandKey, brandSource: "path" };
       }
     }
 
+    // 2. DOM-based detection (selectors + JSON-LD)
+    const domBrand = detectBrandFromDOM();
+    if (domBrand) {
+      const slug = slugifyBrandName(domBrand);
+      log(`Revolve brand from DOM: "${domBrand}" → ${slug}`);
+      return { brandKey: slug, brandSource: "dom" };
+    }
+
+    // 3. URL first-segment heuristic
     const brandMatch = path.match(/^\/([a-z0-9-]+)\//);
     if (brandMatch) {
       const segment = brandMatch[1];
       const skipSegments = ["new", "r", "sale", "clothing", "dresses", "dp", "shop", "category", "womens", "mens"];
       if (!skipSegments.includes(segment)) {
         const slug = segment.replace(/-/g, "_");
-        log("Revolve brand slug detected:", slug);
-        return slug;
+        log("Revolve brand from URL segment:", slug);
+        return { brandKey: slug, brandSource: "url_segment" };
       }
     }
-    return null;
+
+    // 4. Fallback — can't determine brand
+    log("Revolve brand detection failed, using fallback");
+    return { brandKey: "revolve", brandSource: "fallback" };
   }
 
   return null;
@@ -184,7 +241,7 @@ function isProductPage() {
   return segments.length >= 2;
 }
 
-function injectPanel(brandKey) {
+function injectPanel(brandKey, brandSource) {
   // Prevent duplicate injection
   if (document.getElementById("altaana-root")) {
     log("Root already exists, skipping injection");
@@ -195,7 +252,10 @@ function injectPanel(brandKey) {
   log("Detected category:", category);
 
   const productUrl = encodeURIComponent(location.href);
-  const iframeSrc = `${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}&source=extension`;
+  let iframeSrc = `${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}&source=extension`;
+  if (brandSource) {
+    iframeSrc += `&brand_source=${brandSource}`;
+  }
 
   // ── 1. Root container ──────────────────────────────────────────
   const root = document.createElement("div");
@@ -435,18 +495,18 @@ function highlightAndScroll(el) {
   log("URL:", location.href);
   log("Hostname:", location.hostname);
 
-  const brand = detectBrand();
-  if (!brand) {
+  const result = detectBrand();
+  if (!result) {
     log("No supported brand detected on", location.hostname);
     return;
   }
-  log("Detected brand:", brand);
+  log("Detected brand:", result.brandKey, "(source:", result.brandSource + ")");
 
   if (!isProductPage()) {
     log("Not a product page, skipping injection");
     return;
   }
 
-  injectPanel(brand);
+  injectPanel(result.brandKey, result.brandSource);
   log("Injection complete ✓");
 })();
