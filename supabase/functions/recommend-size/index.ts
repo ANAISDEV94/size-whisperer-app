@@ -305,6 +305,8 @@ function computeConfidence(
   matchedKeys: number,
   avgDeviation: number,
   usedFallback: boolean,
+  keyDimOverlapCount?: number,
+  totalKeyDims?: number,
 ): ConfidenceResult {
   const reasons: string[] = [];
   let matchMethod: ConfidenceResult["matchMethod"] = usedFallback ? "fallback_index" : "measurement";
@@ -318,17 +320,26 @@ function computeConfidence(
     score = 0;
     reasons.push(`Only ${matchedKeys} measurement dimension(s) matched — need at least 2`);
   } else if (avgDeviation <= 1.0) {
-    // High confidence: 90-100 scaled by how close to 0
     score = Math.round(100 - (avgDeviation / 1.0) * 10);
     reasons.push(`Excellent match — avg deviation ${avgDeviation.toFixed(2)}″`);
   } else if (avgDeviation <= 2.5) {
-    // Medium confidence: 70-89 scaled
     score = Math.round(89 - ((avgDeviation - 1.0) / 1.5) * 19);
     reasons.push(`Good match — avg deviation ${avgDeviation.toFixed(2)}″`);
   } else {
-    // Low confidence
     score = Math.max(0, Math.round(69 - ((avgDeviation - 2.5) / 2.0) * 69));
     reasons.push(`High deviation (${avgDeviation.toFixed(2)}″) — low confidence`);
+  }
+
+  // Bonus: key dimensions with overlap boost confidence
+  if (keyDimOverlapCount !== undefined && totalKeyDims !== undefined && totalKeyDims > 0) {
+    const overlapRatio = keyDimOverlapCount / totalKeyDims;
+    if (overlapRatio >= 0.75) {
+      const bonus = Math.round(overlapRatio * 5);
+      score = Math.min(100, score + bonus);
+      reasons.push(`${keyDimOverlapCount}/${totalKeyDims} key dimensions overlap — +${bonus}% bonus`);
+    } else if (overlapRatio < 0.5 && score > 0) {
+      reasons.push(`Only ${keyDimOverlapCount}/${totalKeyDims} key dimensions overlap — no bonus`);
+    }
   }
 
   return { score, reasons, matchMethod, measurementCoverage: matchedKeys, avgDeviation };
@@ -1328,12 +1339,24 @@ Deno.serve(async (req) => {
     // ── Confidence scoring ──────────────────────────────────────
     let confidence: ConfidenceResult;
     if (isSameBrand) {
-      // Same brand = perfect confidence, no measurement matching needed
       confidence = { score: 100, reasons: ["Same brand — direct size match"], matchMethod: "measurement", measurementCoverage: 0, avgDeviation: 0 };
     } else {
       const matchedKeys = closestResult?.matchedKeys ?? 0;
       const avgDeviation = closestResult?.bestScore ?? Infinity;
-      confidence = computeConfidence(matchedKeys, avgDeviation, usedFallback);
+
+      // Count how many key dimensions had overlapping intervals
+      const keys = getMeasurementKeys(category);
+      const keyDimsSet = new Set(keys);
+      let keyDimOverlapCount = 0;
+      if (closestResult?.allScores?.[0]?.deviations) {
+        for (const d of closestResult.allScores[0].deviations) {
+          if (keyDimsSet.has(d.dimension) && d.insideRange) {
+            keyDimOverlapCount++;
+          }
+        }
+      }
+
+      confidence = computeConfidence(matchedKeys, avgDeviation, usedFallback, keyDimOverlapCount, keys.length);
     }
 
     // Penalize confidence when conversion fallback was used (cross-system)
@@ -1352,7 +1375,8 @@ Deno.serve(async (req) => {
     }
 
     // ── Hard guardrails ─────────────────────────────────────────
-    const isExtremeSize = recommendedSize ? ["XXS", "XXXS", "00"].includes(recommendedSize.toUpperCase()) : false;
+    const upperRec = recommendedSize ? recommendedSize.toUpperCase().trim() : "";
+    const isExtremeSize = ["XXS", "XXXS", "00"].includes(upperRec);
     let needMoreInfo = needMoreInfoEarly;
     let needMoreInfoReason = needMoreInfoEarly ? "Brand-specific scale — cannot use universal index mapping without measurements" : "";
     let needMoreInfoAskFor = needMoreInfoEarly ? getAskForMeasurement(category) : "";
@@ -1360,8 +1384,8 @@ Deno.serve(async (req) => {
     const matchedKeys = closestResult?.matchedKeys ?? 0;
     const avgDeviation = closestResult?.bestScore ?? Infinity;
 
-    // Rule 1: confidence < 70 → NEED_MORE_INFO (covers matchedKeys < 2 and high deviation)
-    if (!needMoreInfo && confidence.score < 70) {
+    // Rule 1: confidence < 75 → NEED_MORE_INFO
+    if (!needMoreInfo && confidence.score < 75) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
       needMoreInfoReason = matchedKeys < 2
@@ -1369,7 +1393,7 @@ Deno.serve(async (req) => {
         : `Measurement deviation too high (${avgDeviation.toFixed(2)}″) for a reliable recommendation`;
     }
 
-    // Rule 2: never default to extreme/smallest size UNLESS anchor was already XXS/XXXS
+    // Rule 2: never default to extreme/smallest size UNLESS anchor was already extreme
     const anchorIsExtreme = ["XXS", "XXXS", "00"].includes(anchorSizeLabel0.toUpperCase().trim());
     if (!needMoreInfo && isExtremeSize && !anchorIsExtreme && confidence.score < 95) {
       needMoreInfo = true;
@@ -1378,7 +1402,20 @@ Deno.serve(async (req) => {
       confidence.reasons.push("Blocked extreme size — confidence below 95% and anchor was not extreme");
     }
 
-    // Rule 3: brand_source=fallback + confidence < 85 → NEED_MORE_INFO
+    // Rule 3: block MIN or MAX of available sizes when confidence < 85%
+    if (!needMoreInfo && availableSizes.length >= 3 && upperRec) {
+      const upperAvail = availableSizes.map(s => s.toUpperCase().trim());
+      const isMinSize = upperRec === upperAvail[0];
+      const isMaxSize = upperRec === upperAvail[upperAvail.length - 1];
+      if ((isMinSize || isMaxSize) && confidence.score < 85) {
+        needMoreInfo = true;
+        needMoreInfoAskFor = getAskForMeasurement(category);
+        needMoreInfoReason = `Recommended ${isMinSize ? "smallest" : "largest"} available size (${recommendedSize}) — need higher confidence`;
+        confidence.reasons.push(`Blocked edge-of-range size (${isMinSize ? "min" : "max"}) — confidence ${confidence.score}% < 85%`);
+      }
+    }
+
+    // Rule 4: brand_source=fallback + confidence < 85 → NEED_MORE_INFO
     if (!needMoreInfo && brand_source === "fallback" && confidence.score < 85) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
@@ -1387,7 +1424,7 @@ Deno.serve(async (req) => {
     }
 
     // Log low-confidence events
-    if (needMoreInfo || confidence.score < 70) {
+    if (needMoreInfo || confidence.score < 75) {
       try {
         await supabase.from("low_confidence_logs").insert({
           target_brand: target_brand_key,
@@ -1401,7 +1438,7 @@ Deno.serve(async (req) => {
       } catch (logErr) {
         console.error("Failed to log low-confidence event:", logErr);
       }
-      console.warn(`[LOW_CONFIDENCE] score=${confidence.score} coverage=${matchedKeys} avgDeviation=${avgDeviation.toFixed(2)} brand=${target_brand_key} category=${category}`);
+      console.warn(`[LOW_CONFIDENCE] score=${confidence.score} coverage=${matchedKeys} avgDeviation=${avgDeviation.toFixed(2)} brand=${target_brand_key} category=${category} track=${trackUsed}`);
     }
 
     // 5. Scrape product-specific fit info if URL provided
