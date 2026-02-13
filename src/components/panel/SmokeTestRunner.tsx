@@ -86,13 +86,12 @@ const SCENARIOS: Scenario[] = [
     },
     validate: (d) => {
       if (d.needMoreInfo) return { status: "pass", message: "Correctly triggered need more info" };
-      const conf = ((d.confidence as Record<string, unknown>)?.score as number) ?? 100;
-      if (conf < 75) return { status: "warn", message: `Low confidence (${conf}%) but didn't trigger NMI` };
-      return { status: "fail", message: `Expected need more info, got size=${d.size} conf=${conf}%` };
+      const size = d.size as string;
+      return { status: "fail", message: `Expected need more info (no sizing data), got size=${size}` };
     },
   },
   {
-    name: "E: SKIMS M → Reformation tops (overlap)",
+    name: "E: SKIMS M → Reformation tops (containment)",
     input: {
       anchor_brands: [{ brandKey: "skims", displayName: "SKIMS", size: "M" }],
       fit_preference: "true_to_size",
@@ -102,9 +101,9 @@ const SCENARIOS: Scenario[] = [
     validate: (d) => {
       if (d.needMoreInfo) return { status: "warn", message: "Need more info triggered" };
       const size = (d.size as string || "").toUpperCase();
-      const conf = ((d.confidence as Record<string, unknown>)?.score as number) ?? 0;
-      if (conf >= 75) return { status: "pass", message: `Got ${size} with ${conf}% confidence` };
-      return { status: "warn", message: `Got ${size} but low confidence (${conf}%)` };
+      const extreme = ["XXS", "XXXS", "00", "4X", "20"];
+      if (extreme.includes(size)) return { status: "fail", message: `Got extreme size: ${size}` };
+      return { status: "pass", message: `Got ${size} via range containment` };
     },
   },
 ];
