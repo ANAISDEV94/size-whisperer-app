@@ -1,35 +1,57 @@
 
 
-# Fix: Remove Black Rectangle Behind Panel in Embedded Mode
+# Update Airtable Credentials and Add Debug Connectivity Check
 
-## Problem
-The CSS for embedded mode (`src/index.css`, lines 1-10) forces `background: #0D0D0D` on the entire page (`html`, `body`, `#root`). This fills the whole iframe with a solid black color. Since the panel card has `borderRadius: 20`, the black page background is visible in the corners, creating the ugly black rectangle behind the floating panel.
+## Summary
 
-In the correct version (your second screenshot), the page background is **transparent**, so the host website shows through everywhere except where the panel card is rendered.
+The `sync-airtable` edge function already reads all Airtable config from secrets — nothing is hardcoded. The only work needed is updating two secret values via the Lovable UI and adding a debug log at the start of the sync function.
 
-## Solution
-One simple CSS change: set the embedded mode background to `transparent` instead of `#0D0D0D`.
+---
 
-### File: `src/index.css` (lines 1-10)
-Change the embedded mode styles from:
-```css
-background: #0D0D0D !important;
-background-color: #0D0D0D !important;
-```
-to:
-```css
-background: transparent !important;
-background-color: transparent !important;
-```
+## What needs to change
 
-This way:
-- The iframe page itself is see-through (host site visible)
-- The panel card keeps its own dark gradient background (`linear-gradient(180deg, #111010 0%, #0D0D0D 40%, #0A0909 100%)`) and rounded corners
-- The rounded corners display correctly against the host page, exactly as in your second screenshot
+### 1. Update two secrets (no code change — done in Lovable UI)
 
-## What stays the same
-- Panel card dimensions, border, rounded corners, gradient -- all untouched
-- Normal (non-embedded) mode -- untouched
-- Close button postMessage logic -- untouched
-- Extension `content.js` -- no changes needed (already set to `transparent`)
+The following secrets need new values. Navigate to:
+
+**Settings (gear icon, top-left) -> Lovable Cloud -> Secrets**
+
+| Secret Name | New Value |
+|---|---|
+| `AIRTABLE_BASE_ID` | `appIo7XMhdyhwdllv` |
+| `AIRTABLE_TABLE_NAME` | `Imported table - FIX` |
+
+These secrets already exist, so you will be updating (not creating) them.
+
+### 2. Paste the new token (same UI path)
+
+In the same Secrets panel, update:
+
+| Secret Name | Action |
+|---|---|
+| `AIRTABLE_API_KEY` | Paste your new Personal Access Token here |
+
+### 3. Add debug connectivity check (code change)
+
+Add a small block at the top of the sync handler in `supabase/functions/sync-airtable/index.ts` that, when the request body contains `{ "debug": true }`, logs the table name, last 4 characters of the base ID, and attempts to fetch one record to confirm connectivity — then returns the result without doing a full sync.
+
+This is a ~20-line addition inside the existing `try` block, after secrets are loaded and before the full sync runs. No UI changes.
+
+---
+
+## Files changed
+
+| File | Change |
+|---|---|
+| `supabase/functions/sync-airtable/index.ts` | Add debug connectivity probe (~20 lines) |
+
+No other files are touched. No UI, layout, or styling changes.
+
+---
+
+## Post-update test checklist
+
+1. **Trigger sync**: Call the `sync-airtable` function with `{ "debug": true }` to confirm connectivity (should log base ID last 4, table name, and whether a sample record was fetched).
+2. **Full sync**: Call `sync-airtable` without debug flag and confirm rows are imported from the new table.
+3. **Smoke test**: Navigate to `/?debug=1`, click "Run Smoke Tests", and confirm no crashes and at least Scenario A passes.
 
