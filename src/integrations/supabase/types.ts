@@ -119,6 +119,60 @@ export type Database = {
         }
         Relationships: []
       }
+      recommendation_runs: {
+        Row: {
+          anchor_brand: string
+          anchor_size: string
+          ask_for: string | null
+          category: string
+          confidence: number
+          coverage: number
+          created_at: string
+          fallback_used: boolean
+          id: string
+          output_status: string
+          product_url: string | null
+          reason: string | null
+          recommended_size: string | null
+          target_brand: string
+          user_id: string | null
+        }
+        Insert: {
+          anchor_brand: string
+          anchor_size: string
+          ask_for?: string | null
+          category: string
+          confidence?: number
+          coverage?: number
+          created_at?: string
+          fallback_used?: boolean
+          id?: string
+          output_status?: string
+          product_url?: string | null
+          reason?: string | null
+          recommended_size?: string | null
+          target_brand: string
+          user_id?: string | null
+        }
+        Update: {
+          anchor_brand?: string
+          anchor_size?: string
+          ask_for?: string | null
+          category?: string
+          confidence?: number
+          coverage?: number
+          created_at?: string
+          fallback_used?: boolean
+          id?: string
+          output_status?: string
+          product_url?: string | null
+          reason?: string | null
+          recommended_size?: string | null
+          target_brand?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       recommendations: {
         Row: {
           brand_key: string
