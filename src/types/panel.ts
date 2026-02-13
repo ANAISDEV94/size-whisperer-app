@@ -41,8 +41,11 @@ export interface ConfidenceInfo {
 }
 
 export interface DebugTrace {
-  detectedCategory: string;
-  detectionSource: string; // "url" | "dom" | "heuristic"
+  detectedCategoryRaw?: string;
+  normalizedCategory?: string;
+  airtableCategoryMatchesCount?: number;
+  detectedCategory?: string; // legacy compat
+  detectionSource: string;
   anchorBrand: string;
   anchorSize: string;
   anchorMeasurements: Record<string, number>;
@@ -56,6 +59,11 @@ export interface DebugTrace {
   availableSizes: string[];
   fitPreference: string;
   targetFitTendency: string | null;
+  anchorSizeSystem?: string;
+  sizeSystemFilterUsed?: string;
+  targetRowsBeforeSystemFilter?: number;
+  targetRowsAfterSystemFilter?: number;
+  targetRowsFilteredOut?: number;
   isDenimScale: boolean;
   usedFallback: boolean;
   usedEstimatedMeasurements: boolean;
