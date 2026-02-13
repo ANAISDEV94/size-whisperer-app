@@ -40,6 +40,15 @@ export interface ConfidenceInfo {
   matchMethod: "measurement" | "fallback_index" | "fallback_legacy";
 }
 
+export interface DimensionDeviation {
+  dimension: string;
+  userMidpoint: number;
+  targetMin: number;
+  targetMax: number;
+  deviation: number;
+  insideRange: boolean;
+}
+
 export interface DebugTrace {
   detectedCategoryRaw?: string;
   normalizedCategory?: string;
@@ -76,8 +85,8 @@ export interface DebugTrace {
     measurements: Record<string, unknown> | null;
     fit_notes: string | null;
   } | null;
-  top3Candidates: { size: string; score: number; matched: number }[];
-  allSizeScores: { size: string; score: number; matched: number }[];
+  top3Candidates: { size: string; score: number; matched: number; deviations?: DimensionDeviation[] }[];
+  allSizeScores: { size: string; score: number; matched: number; deviations?: DimensionDeviation[] }[];
   comparisonLogic: string[];
 }
 

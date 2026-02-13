@@ -1,4 +1,4 @@
-import type { DebugTrace, ConfidenceInfo } from "@/types/panel";
+import type { DebugTrace, ConfidenceInfo, DimensionDeviation } from "@/types/panel";
 
 interface DebugPanelProps {
   debug: DebugTrace;
@@ -132,13 +132,31 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
       {debug.top3Candidates && debug.top3Candidates.length > 0 && (
         <Section title="Top 3 candidate sizes">
           {debug.top3Candidates.map((s, i) => (
-            <div key={i} className="flex justify-between">
-              <span className="text-foreground">
-                {i === 0 ? "🏆 " : ""}{s.size}
-              </span>
-              <span className="text-muted-foreground">
-                dist: {s.score.toFixed(2)} ({s.matched} dims)
-              </span>
+            <div key={i} className="mb-2">
+              <div className="flex justify-between">
+                <span className="text-foreground">
+                  {i === 0 ? "🏆 " : ""}{s.size}
+                </span>
+                <span className="text-muted-foreground">
+                  avg dev: {s.score.toFixed(2)}″ ({s.matched} dims)
+                </span>
+              </div>
+              {s.deviations && s.deviations.length > 0 && (
+                <div className="ml-3 mt-0.5 space-y-0.5">
+                  {s.deviations.map((d: DimensionDeviation, j: number) => (
+                    <div key={j} className="flex justify-between text-muted-foreground">
+                      <span>{d.dimension}</span>
+                      <span>
+                        user: {d.userMidpoint.toFixed(1)}″ → [{d.targetMin.toFixed(1)}-{d.targetMax.toFixed(1)}]
+                        {d.insideRange
+                          ? <span className="text-green-400 ml-1">✓ in range</span>
+                          : <span className="text-yellow-400 ml-1">dev: {d.deviation.toFixed(2)}″</span>
+                        }
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </Section>

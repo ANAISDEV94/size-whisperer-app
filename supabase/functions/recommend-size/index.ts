@@ -89,12 +89,111 @@ interface MeasurementValue {
   value?: number;
   min?: number;
   max?: number;
+  mid?: number;
   options?: (number | { min: number; max: number })[];
   unit?: string;
 }
 
+// ── Normalized measurement range ────────────────────────────────
+interface NormalizedRange {
+  min: number;
+  max: number;
+  midpoint: number;
+}
+
+/**
+ * Parse any measurement cell into a normalized {min, max, midpoint}.
+ * Handles: single number, range "34-36", slash "34/35", object with min/max,
+ * object with value, string with units/spaces/quotes.
+ */
+function normalizeToRange(raw: unknown): NormalizedRange | null {
+  if (raw === null || raw === undefined) return null;
+
+  // Already structured object
+  if (typeof raw === "object" && raw !== null) {
+    const obj = raw as Record<string, unknown>;
+
+    // Has mid/midpoint from sync-airtable
+    if (obj.mid !== undefined && typeof obj.mid === "number") {
+      const min = typeof obj.min === "number" ? obj.min : obj.mid;
+      const max = typeof obj.max === "number" ? obj.max : obj.mid;
+      return { min, max, midpoint: obj.mid };
+    }
+
+    // Has min/max
+    if (typeof obj.min === "number" && typeof obj.max === "number") {
+      return { min: obj.min, max: obj.max, midpoint: (obj.min + obj.max) / 2 };
+    }
+
+    // Has value
+    if (typeof obj.value === "number") {
+      return { min: obj.value, max: obj.value, midpoint: obj.value };
+    }
+
+    // Has options array
+    if (Array.isArray(obj.options) && obj.options.length > 0) {
+      const nums = (obj.options as Array<number | { min: number; max: number }>).map((o) =>
+        typeof o === "number" ? o : (o.min + o.max) / 2
+      );
+      const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
+      return { min: Math.min(...nums), max: Math.max(...nums), midpoint: avg };
+    }
+
+    return null;
+  }
+
+  // Numeric
+  if (typeof raw === "number") {
+    return { min: raw, max: raw, midpoint: raw };
+  }
+
+  // String parsing
+  if (typeof raw === "string") {
+    // Strip spaces, quotes, unit suffixes like "in", "cm", """
+    const cleaned = raw.replace(/[""']/g, "").replace(/\s*(in|cm|inches|")\s*/gi, "").trim();
+    if (!cleaned) return null;
+
+    // Range: "34-36" or "34 - 36"
+    const dashMatch = cleaned.match(/^([\d.]+)\s*[-–]\s*([\d.]+)$/);
+    if (dashMatch) {
+      const a = parseFloat(dashMatch[1]);
+      const b = parseFloat(dashMatch[2]);
+      if (!isNaN(a) && !isNaN(b)) return { min: Math.min(a, b), max: Math.max(a, b), midpoint: (a + b) / 2 };
+    }
+
+    // Slash: "34/35"
+    const slashMatch = cleaned.match(/^([\d.]+)\s*\/\s*([\d.]+)$/);
+    if (slashMatch) {
+      const a = parseFloat(slashMatch[1]);
+      const b = parseFloat(slashMatch[2]);
+      if (!isNaN(a) && !isNaN(b)) return { min: Math.min(a, b), max: Math.max(a, b), midpoint: (a + b) / 2 };
+    }
+
+    // Single number
+    const num = parseFloat(cleaned);
+    if (!isNaN(num)) return { min: num, max: num, midpoint: num };
+  }
+
+  return null;
+}
+
+/**
+ * Normalize all measurements in a row to NormalizedRange.
+ */
+function normalizeMeasurements(raw: Record<string, unknown> | null): Record<string, NormalizedRange> {
+  const result: Record<string, NormalizedRange> = {};
+  if (!raw) return result;
+  for (const [key, val] of Object.entries(raw)) {
+    const nr = normalizeToRange(val);
+    if (nr) result[key] = nr;
+  }
+  return result;
+}
+
+// Legacy compat helper (still used by AI estimation)
 function getMidpoint(m: MeasurementValue | null): number | null {
   if (!m) return null;
+  if (m.mid !== undefined) return m.mid;
   if (m.value !== undefined) return m.value;
   if (m.min !== undefined && m.max !== undefined) return (m.min + m.max) / 2;
   if (m.options && m.options.length > 0) {
@@ -158,7 +257,7 @@ function getMeasurementKeys(category: string): string[] {
 // ── Confidence scoring (deterministic) ──────────────────────────
 
 interface ConfidenceResult {
-  score: number; // 0, 70, 85, or 95
+  score: number;
   reasons: string[];
   matchMethod: "measurement" | "fallback_index" | "fallback_legacy";
   measurementCoverage: number;
@@ -177,26 +276,35 @@ function computeConfidence(
     reasons.push("No sizing chart data — used universal index mapping");
   }
 
-  // Deterministic confidence tiers
   let score: number;
   if (matchedKeys < 2) {
     score = 0;
     reasons.push(`Only ${matchedKeys} measurement dimension(s) matched — need at least 2`);
-  } else if (avgDeviation <= 0.75) {
-    score = 95;
+  } else if (avgDeviation <= 1.0) {
+    // High confidence: 90-100 scaled by how close to 0
+    score = Math.round(100 - (avgDeviation / 1.0) * 10);
     reasons.push(`Excellent match — avg deviation ${avgDeviation.toFixed(2)}″`);
-  } else if (avgDeviation <= 1.5) {
-    score = 85;
+  } else if (avgDeviation <= 2.5) {
+    // Medium confidence: 70-89 scaled
+    score = Math.round(89 - ((avgDeviation - 1.0) / 1.5) * 19);
     reasons.push(`Good match — avg deviation ${avgDeviation.toFixed(2)}″`);
-  } else if (avgDeviation <= 2.0) {
-    score = 70;
-    reasons.push(`Marginal match — avg deviation ${avgDeviation.toFixed(2)}″`);
   } else {
-    score = 0;
-    reasons.push(`Too much deviation (${avgDeviation.toFixed(2)}″) — cannot recommend confidently`);
+    // Low confidence
+    score = Math.max(0, Math.round(69 - ((avgDeviation - 2.5) / 2.0) * 69));
+    reasons.push(`High deviation (${avgDeviation.toFixed(2)}″) — low confidence`);
   }
 
   return { score, reasons, matchMethod, measurementCoverage: matchedKeys, avgDeviation };
+}
+
+// ── Per-dimension deviation detail for debug ─────────────────────
+interface DimensionDeviation {
+  dimension: string;
+  userMidpoint: number;
+  targetMin: number;
+  targetMax: number;
+  deviation: number;
+  insideRange: boolean;
 }
 
 // Extended findClosestSize returning debug trace
@@ -207,12 +315,13 @@ interface ClosestSizeResult {
   matchedKeys: number;
   totalKeys: number;
   anchorMids: Record<string, number>;
+  anchorRanges: Record<string, NormalizedRange>;
   targetRowUsed: SizingRow | null;
-  allScores: { size: string; score: number; matched: number }[];
+  allScores: { size: string; score: number; matched: number; deviations: DimensionDeviation[] }[];
 }
 
 function findClosestSize(
-  anchorMeasurements: Record<string, MeasurementValue | null> | null,
+  anchorMeasurements: Record<string, unknown> | null,
   targetSizes: SizingRow[],
   fitPreference: string,
   category?: string
@@ -220,34 +329,73 @@ function findClosestSize(
   if (!anchorMeasurements || targetSizes.length === 0) return null;
 
   const keys = getMeasurementKeys(category || "default");
+  // Normalize anchor measurements
+  const anchorNorm = normalizeMeasurements(anchorMeasurements as Record<string, unknown>);
   const anchorMids: Record<string, number> = {};
+  const anchorRanges: Record<string, NormalizedRange> = {};
+
   for (const k of keys) {
-    const mid = getMidpoint(anchorMeasurements[k]);
-    if (mid !== null) anchorMids[k] = mid;
+    if (anchorNorm[k]) {
+      anchorMids[k] = anchorNorm[k].midpoint;
+      anchorRanges[k] = anchorNorm[k];
+    }
   }
 
-  if (Object.keys(anchorMids).length === 0) return null;
+  // Also pick up any extra measurement keys present in both anchor and target
+  const allMeasurementKeys = new Set<string>(keys);
+  for (const k of Object.keys(anchorNorm)) {
+    allMeasurementKeys.add(k);
+  }
+
+  // Build user midpoints from anchor
+  const userMidpoints: Record<string, number> = {};
+  for (const k of allMeasurementKeys) {
+    if (anchorNorm[k]) {
+      userMidpoints[k] = anchorNorm[k].midpoint;
+      if (!anchorRanges[k]) anchorRanges[k] = anchorNorm[k];
+    }
+  }
+
+  if (Object.keys(userMidpoints).length === 0) return null;
 
   let bestSize = targetSizes[0];
   let bestScore = Infinity;
-  const allScores: { size: string; score: number; matched: number }[] = [];
+  const allScores: { size: string; score: number; matched: number; deviations: DimensionDeviation[] }[] = [];
 
   for (const row of targetSizes) {
     if (!row.measurements) continue;
-    let score = 0;
+    const targetNorm = normalizeMeasurements(row.measurements as Record<string, unknown>);
+    let totalDeviation = 0;
     let matched = 0;
-    for (const [k, anchorVal] of Object.entries(anchorMids)) {
-      const targetMid = getMidpoint(row.measurements[k]);
-      if (targetMid !== null) {
-        score += Math.abs(targetMid - anchorVal);
-        matched++;
+    const deviations: DimensionDeviation[] = [];
+
+    for (const [k, userMid] of Object.entries(userMidpoints)) {
+      const target = targetNorm[k];
+      if (!target) continue;
+
+      let deviation: number;
+      let insideRange: boolean;
+
+      if (userMid >= target.min && userMid <= target.max) {
+        // Case A: user midpoint inside target range → perfect fit
+        deviation = 0;
+        insideRange = true;
+      } else {
+        // Case B: distance to nearest boundary
+        deviation = userMid < target.min ? target.min - userMid : userMid - target.max;
+        insideRange = false;
       }
+
+      totalDeviation += deviation;
+      matched++;
+      deviations.push({ dimension: k, userMidpoint: userMid, targetMin: target.min, targetMax: target.max, deviation, insideRange });
     }
+
     if (matched > 0) {
-      score /= matched;
-      allScores.push({ size: row.size_label, score, matched });
-      if (score < bestScore) {
-        bestScore = score;
+      const avgDev = totalDeviation / matched;
+      allScores.push({ size: row.size_label, score: avgDev, matched, deviations });
+      if (avgDev < bestScore || (avgDev === bestScore && matched > (allScores.find(s => s.size === bestSize.size_label)?.matched || 0))) {
+        bestScore = avgDev;
         bestSize = row;
       }
     }
@@ -268,8 +416,9 @@ function findClosestSize(
     fitNotes: bestSize.fit_notes,
     bestScore,
     matchedKeys: allScores.find(s => s.size === bestSize.size_label)?.matched || 0,
-    totalKeys: Object.keys(anchorMids).length,
+    totalKeys: Object.keys(userMidpoints).length,
     anchorMids,
+    anchorRanges,
     targetRowUsed: bestSize,
     allScores: allScores.sort((a, b) => a.score - b.score),
   };
@@ -1101,33 +1250,38 @@ Deno.serve(async (req) => {
     // Include debug trace only when requested
     if (debug_mode) {
       const keys = getMeasurementKeys(category);
-      const anchorMids: Record<string, number> = {};
-      const anchorRaw: Record<string, { min: number | null; max: number | null; midpoint: number | null }> = {};
+      const anchorRangesDebug: Record<string, { min: number | null; max: number | null; midpoint: number | null }> = {};
+      const anchorMidsDebug: Record<string, number> = {};
       const missingDimensions: string[] = [];
 
-      for (const k of keys) {
-        const mv = anchorMeasurementsUsed?.[k] ?? null;
-        const mid = getMidpoint(mv);
-        if (mid !== null) {
-          anchorMids[k] = mid;
-          anchorRaw[k] = {
-            min: mv?.min ?? mv?.value ?? null,
-            max: mv?.max ?? mv?.value ?? null,
-            midpoint: mid,
-          };
-        } else {
-          missingDimensions.push(k);
+      if (closestResult) {
+        for (const k of keys) {
+          const r = closestResult.anchorRanges[k];
+          if (r) {
+            anchorMidsDebug[k] = r.midpoint;
+            anchorRangesDebug[k] = { min: r.min, max: r.max, midpoint: r.midpoint };
+          } else {
+            missingDimensions.push(k);
+          }
         }
+      } else if (anchorMeasurementsUsed) {
+        const norm = normalizeMeasurements(anchorMeasurementsUsed as Record<string, unknown>);
+        for (const k of keys) {
+          if (norm[k]) {
+            anchorMidsDebug[k] = norm[k].midpoint;
+            anchorRangesDebug[k] = { min: norm[k].min, max: norm[k].max, midpoint: norm[k].midpoint };
+          } else {
+            missingDimensions.push(k);
+          }
+        }
+      } else {
+        for (const k of keys) missingDimensions.push(k);
       }
 
-      // Determine detection source heuristic
       const detectionSource: string = product_url ? "url" : "heuristic";
-
-      // Top 3 candidate sizes
       const allScores = closestResult?.allScores || [];
       const top3Candidates = allScores.slice(0, 3);
 
-      // Find the anchor row that was actually used for debug display
       const anchorRowChosen = anchorSizingData?.find(
         (r: { brand_key: string; size_label: string }) =>
           r.brand_key === anchor_brands[0]?.brandKey &&
@@ -1141,8 +1295,8 @@ Deno.serve(async (req) => {
         detectionSource,
         anchorBrand: anchor_brands[0]?.displayName || anchor_brands[0]?.brandKey,
         anchorSize: anchor_brands[0]?.size,
-        anchorMeasurements: anchorMids,
-        anchorMeasurementsRaw: anchorRaw,
+        anchorMeasurements: anchorMidsDebug,
+        anchorMeasurementsRaw: anchorRangesDebug,
         missingDimensions,
         measurementCoverage: confidence.measurementCoverage,
         keyDimensionsList: keys,
@@ -1173,8 +1327,16 @@ Deno.serve(async (req) => {
               fit_notes: closestResult.targetRowUsed.fit_notes,
             }
           : null,
-        top3Candidates,
-        allSizeScores: allScores,
+        top3Candidates: top3Candidates.map(s => ({
+          ...s,
+          deviations: s.deviations,
+        })),
+        allSizeScores: allScores.map(s => ({
+          size: s.size,
+          score: s.score,
+          matched: s.matched,
+          deviations: s.deviations,
+        })),
         comparisonLogic: comparisons.map(c => `${c.brandName} ${c.size} → ${c.fitTag}`),
       };
     }
