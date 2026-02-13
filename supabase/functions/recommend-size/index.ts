@@ -804,7 +804,7 @@ async function scrapeProductFit(productUrl: string): Promise<string | null> {
 
 // ── AI bullet generation ────────────────────────────────────────
 
-async function generateBullets(context: {
+interface BulletContext {
   anchorBrands: { displayName: string; size: string }[];
   targetBrand: string;
   recommendedSize: string;
@@ -812,13 +812,49 @@ async function generateBullets(context: {
   fitNotes: string | null;
   targetFitTendency: string | null;
   productFitSummary: string | null;
-}): Promise<string[]> {
+  /** Per-dimension overlap/deviation details for the chosen size */
+  deviations?: DimensionDeviation[];
+  /** Runner-up size and its score, if close to the winner */
+  runnerUp?: { size: string; score: number; deviations: DimensionDeviation[] } | null;
+  /** Winning size score */
+  winnerScore?: number;
+}
+
+/**
+ * Build a human-readable overlap summary from deviations for the AI prompt.
+ */
+function buildOverlapSummary(deviations: DimensionDeviation[], size: string): string {
+  const parts: string[] = [];
+  for (const d of deviations) {
+    if (d.insideRange && d.overlap > 0) {
+      parts.push(`${d.dimension}: your range (${d.userMin}–${d.userMax}″) overlaps ${size} (${d.targetMin}–${d.targetMax}″) by ${d.overlap.toFixed(1)}″`);
+    } else if (d.deviation > 0) {
+      parts.push(`${d.dimension}: ${d.deviation.toFixed(1)}″ gap between your range and ${size}`);
+    }
+  }
+  return parts.join("; ");
+}
+
+async function generateBullets(context: BulletContext): Promise<string[]> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) {
     return generateFallbackBullets(context);
   }
 
   try {
+    // Build overlap context lines
+    let overlapContext = "";
+    if (context.deviations && context.deviations.length > 0) {
+      overlapContext = `- Measurement overlap for chosen size (${context.recommendedSize}): ${buildOverlapSummary(context.deviations, context.recommendedSize)}`;
+    }
+    let runnerUpContext = "";
+    if (context.runnerUp && context.winnerScore !== undefined) {
+      const scoreDiff = Math.abs(context.runnerUp.score - context.winnerScore);
+      if (scoreDiff < 0.5) {
+        runnerUpContext = `- Runner-up size ${context.runnerUp.size} was very close (${scoreDiff.toFixed(2)}″ difference). ${buildOverlapSummary(context.runnerUp.deviations, context.runnerUp.size)}`;
+      }
+    }
+
     const prompt = `You are a sizing expert for a women's fashion sizing tool called ALTAANA. Generate exactly 3 short, helpful bullet points explaining why we recommend size "${context.recommendedSize}" in ${context.targetBrand}.
 
 Context:
@@ -827,14 +863,17 @@ Context:
 ${context.fitNotes ? `- Brand fit notes: ${context.fitNotes}` : ""}
 ${context.targetFitTendency ? `- ${context.targetBrand} generally ${context.targetFitTendency.replace(/_/g, " ")}` : ""}
 ${context.productFitSummary ? `- This specific product: ${context.productFitSummary}` : ""}
+${overlapContext ? overlapContext : ""}
+${runnerUpContext ? runnerUpContext : ""}
 
 Rules:
 - Each bullet must be under 15 words
 - First bullet references what they wear in their anchor brand
-- Second bullet addresses how the target brand fits, including fabric/material details if available
-- Third bullet mentions the fit preference or fabric-related sizing advice (e.g. stretch, give)
+- Second bullet: if measurement overlap data is available, reference which dimensions overlap (e.g. "Your waist overlaps Size 14, giving a reliable fit"). If sizes were close, mention what would cause sizing up or down in one clause.
+- Third bullet: ONLY mention fabric/stretch/material if productFitSummary actually contains fabric info (e.g. elastane, stretch, silk). Otherwise, mention the fit preference or brand tendency.
 - Be definitive and confident, no hedging language
-- Do NOT use bullet point characters, just return plain text`;
+- Do NOT use bullet point characters, just return plain text
+- Do NOT invent fabric claims — only reference fabric if product context explicitly mentions it`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -892,21 +931,20 @@ Rules:
   }
 }
 
-function generateFallbackBullets(context: {
-  anchorBrands: { displayName: string; size: string }[];
-  targetBrand: string;
-  recommendedSize: string;
-  fitPreference: string;
-  fitNotes: string | null;
-  targetFitTendency: string | null;
-  productFitSummary: string | null;
-}): string[] {
+function generateFallbackBullets(context: BulletContext): string[] {
   const anchor = context.anchorBrands[0];
   const bullets = [
     `You wear ${anchor.size} in ${anchor.displayName}`,
   ];
 
-  if (context.targetFitTendency) {
+  // Second bullet: overlap-aware or brand tendency
+  const overlapping = (context.deviations || []).filter(d => d.insideRange && d.overlap > 0);
+  if (overlapping.length > 0) {
+    const dims = overlapping.map(d => d.dimension).join(" and ");
+    bullets.push(`Your ${dims} measurements overlap ${context.recommendedSize} for a reliable fit`);
+  } else if (context.runnerUp && context.winnerScore !== undefined && Math.abs(context.runnerUp.score - context.winnerScore) < 0.5) {
+    bullets.push(`Between ${context.recommendedSize} and ${context.runnerUp.size} — chosen for better overall overlap`);
+  } else if (context.targetFitTendency) {
     bullets.push(`${context.targetBrand} ${context.targetFitTendency.replace(/_/g, " ")}`);
   } else if (context.fitNotes) {
     bullets.push(context.fitNotes);
@@ -914,8 +952,14 @@ function generateFallbackBullets(context: {
     bullets.push(`${context.targetBrand} sizing aligns with standard US sizing`);
   }
 
-  const prefLabel = context.fitPreference.replace(/_/g, " ");
-  bullets.push(`Adjusted for your ${prefLabel} fit preference`);
+  // Third bullet: only mention fabric if product fit summary actually has stretch/fabric info
+  const hasFabricInfo = context.productFitSummary && /stretch|elastane|spandex|lycra|silk|cotton|poly/i.test(context.productFitSummary);
+  if (hasFabricInfo) {
+    bullets.push(context.productFitSummary!.length > 60 ? context.productFitSummary!.slice(0, 57) + "…" : context.productFitSummary!);
+  } else {
+    const prefLabel = context.fitPreference.replace(/_/g, " ");
+    bullets.push(`Adjusted for your ${prefLabel} fit preference`);
+  }
 
   return bullets;
 }
@@ -1464,6 +1508,11 @@ Deno.serve(async (req) => {
       productFitSummary = await scrapeProductFit(product_url);
     }
 
+    // Prepare overlap context for bullets
+    const bestDeviations = closestResult?.allScores?.[0]?.deviations || [];
+    const runnerUpEntry = closestResult?.allScores?.[1] || null;
+    const winnerScore = closestResult?.allScores?.[0]?.score;
+
     // 6. Generate AI bullets
     const bullets = await generateBullets({
       anchorBrands: anchor_brands,
@@ -1473,6 +1522,9 @@ Deno.serve(async (req) => {
       fitNotes,
       targetFitTendency,
       productFitSummary,
+      deviations: bestDeviations,
+      runnerUp: runnerUpEntry,
+      winnerScore,
     });
 
     // 7. Generate comparisons
