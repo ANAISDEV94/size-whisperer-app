@@ -920,6 +920,27 @@ Deno.serve(async (req) => {
       recommendationId = recData?.id || null;
     }
 
+    // ── Log every run to recommendation_runs ────────────────────
+    try {
+      await supabase.from("recommendation_runs").insert({
+        user_id: user_id || null,
+        target_brand: target_brand_key,
+        category,
+        product_url: product_url || null,
+        anchor_brand: anchor_brands[0]?.brandKey || "unknown",
+        anchor_size: anchor_brands[0]?.size || "unknown",
+        output_status: needMoreInfo ? "NEED_MORE_INFO" : "OK",
+        recommended_size: needMoreInfo ? null : recommendedSize,
+        confidence: confidence.score,
+        coverage: confidence.measurementCoverage,
+        fallback_used: usedFallback,
+        reason: needMoreInfo ? needMoreInfoReason : null,
+        ask_for: needMoreInfo ? needMoreInfoAskFor : null,
+      });
+    } catch (auditErr) {
+      console.error("Failed to log recommendation run:", auditErr);
+    }
+
     // ── Build response ──────────────────────────────────────────
     const responseBody: Record<string, unknown> = needMoreInfo
       ? {
