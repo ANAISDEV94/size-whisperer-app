@@ -1,0 +1,1 @@
+ALTER TABLE public.sizing_charts ADD COLUMN IF NOT EXISTS row_quality integer NOT NULL DEFAULT 0;

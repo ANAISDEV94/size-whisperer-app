@@ -213,6 +213,7 @@ export type Database = {
           id: string
           measurements: Json | null
           raw_measurements: Json | null
+          row_quality: number
           size_label: string
           size_scale: string
           synced_at: string | null
@@ -226,6 +227,7 @@ export type Database = {
           id?: string
           measurements?: Json | null
           raw_measurements?: Json | null
+          row_quality?: number
           size_label: string
           size_scale?: string
           synced_at?: string | null
@@ -239,6 +241,7 @@ export type Database = {
           id?: string
           measurements?: Json | null
           raw_measurements?: Json | null
+          row_quality?: number
           size_label?: string
           size_scale?: string
           synced_at?: string | null

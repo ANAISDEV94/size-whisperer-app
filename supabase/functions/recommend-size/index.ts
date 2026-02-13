@@ -1037,22 +1037,38 @@ Deno.serve(async (req) => {
     }
 
     // Query target sizing data: try normalized + variants
-    let targetSizingDataRaw: Array<{ size_label: string; measurements: Record<string, unknown> | null; fit_notes: string | null; size_scale: string }> = [];
+    const ROW_QUALITY_THRESHOLD = 2;
+    let targetSizingDataRaw: Array<{ size_label: string; measurements: Record<string, unknown> | null; fit_notes: string | null; size_scale: string; row_quality: number }> = [];
     const { data: targetDataExact } = await supabase
       .from("sizing_charts")
-      .select("size_label, measurements, fit_notes, size_scale")
+      .select("size_label, measurements, fit_notes, size_scale, row_quality")
       .eq("brand_key", target_brand_key)
-      .in("category", [...categoryVariants]);
+      .in("category", [...categoryVariants])
+      .gte("row_quality", ROW_QUALITY_THRESHOLD);
 
     targetSizingDataRaw = targetDataExact || [];
+
+    // If quality filter was too strict, retry without it
+    let targetRowsExcludedByQuality = 0;
+    if (targetSizingDataRaw.length === 0) {
+      const { data: targetDataAll } = await supabase
+        .from("sizing_charts")
+        .select("size_label, measurements, fit_notes, size_scale, row_quality")
+        .eq("brand_key", target_brand_key)
+        .in("category", [...categoryVariants]);
+      const allRows = targetDataAll || [];
+      targetRowsExcludedByQuality = allRows.filter(r => (r.row_quality ?? 0) < ROW_QUALITY_THRESHOLD).length;
+      targetSizingDataRaw = allRows;
+    }
 
     // Brand-only fallback if no rows matched ANY category variant
     let categoryFallbackUsed = false;
     if (targetSizingDataRaw.length === 0) {
       const { data: targetDataAll } = await supabase
         .from("sizing_charts")
-        .select("size_label, measurements, fit_notes, size_scale")
-        .eq("brand_key", target_brand_key);
+        .select("size_label, measurements, fit_notes, size_scale, row_quality")
+        .eq("brand_key", target_brand_key)
+        .gte("row_quality", ROW_QUALITY_THRESHOLD);
       targetSizingDataRaw = targetDataAll || [];
       categoryFallbackUsed = true;
     }
@@ -1132,20 +1148,21 @@ Deno.serve(async (req) => {
 
     // 3. Fetch anchor brand sizing data — try category variants, then brand-only fallback
     const anchorBrandKeys = anchor_brands.map((a: { brandKey: string }) => a.brandKey);
-    let anchorSizingDataAll: Array<{ brand_key: string; size_label: string; measurements: Record<string, unknown> | null; size_scale: string }> = [];
+    let anchorSizingDataAll: Array<{ brand_key: string; size_label: string; measurements: Record<string, unknown> | null; size_scale: string; row_quality: number }> = [];
     const { data: anchorDataExact } = await supabase
       .from("sizing_charts")
-      .select("brand_key, size_label, measurements, size_scale")
+      .select("brand_key, size_label, measurements, size_scale, row_quality")
       .in("brand_key", anchorBrandKeys)
-      .in("category", [...categoryVariants]);
+      .in("category", [...categoryVariants])
+      .gte("row_quality", ROW_QUALITY_THRESHOLD);
 
     anchorSizingDataAll = anchorDataExact || [];
 
-    // Brand-only fallback for anchor
+    // Brand-only fallback for anchor (also try without quality filter)
     if (anchorSizingDataAll.length === 0) {
       const { data: anchorDataAll } = await supabase
         .from("sizing_charts")
-        .select("brand_key, size_label, measurements, size_scale")
+        .select("brand_key, size_label, measurements, size_scale, row_quality")
         .in("brand_key", anchorBrandKeys);
       anchorSizingDataAll = anchorDataAll || [];
     }
@@ -1631,6 +1648,9 @@ Deno.serve(async (req) => {
           deviations: s.deviations,
         })),
         comparisonLogic: comparisons.map(c => `${c.brandName} ${c.size} → ${c.fitTag}`),
+        rowQualityThreshold: ROW_QUALITY_THRESHOLD,
+        targetRowsExcludedByQuality: targetRowsExcludedByQuality,
+        targetRowsConsidered: targetSizingData.length,
       };
     }
 
