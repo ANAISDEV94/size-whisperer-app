@@ -892,6 +892,78 @@ Deno.serve(async (req) => {
       return sizeTypesCompatible(rowType, anchorSizeType);
     });
 
+    // ── GUARD: No data for either brand → need more info ────────
+    if (allTargetRows.length === 0 && anchorSizingDataAll.length === 0) {
+      const nmiCategory = normalizeCategory(detectedCategoryRaw);
+      const askFor = getMeasurementKeys(nmiCategory)[0] || "bust";
+      try {
+        await supabase.from("recommendation_runs").insert({
+          user_id: user_id || null,
+          target_brand: target_brand_key,
+          category,
+          product_url: product_url || null,
+          anchor_brand: anchor_brands[0]?.brandKey || "unknown",
+          anchor_size: anchor_brands[0]?.size || "unknown",
+          output_status: "NEED_MORE_INFO",
+          recommended_size: null,
+          confidence: 0,
+          coverage: 0,
+          fallback_used: false,
+          reason: "no_brand_data",
+        });
+      } catch (auditErr) {
+        console.error("Failed to log recommendation run:", auditErr);
+      }
+      const nmiResponse: Record<string, unknown> = {
+        size: null,
+        brandName: targetDisplayName,
+        sizeScale: targetSizeScale,
+        needMoreInfo: true,
+        reason: "no_brand_data",
+        ask_for: askFor,
+        bullets: [
+          "We don't have sizing intelligence for this brand yet",
+          "Add a brand you've worn to calibrate your fit",
+          "Or boost accuracy with optional details",
+        ],
+        comparisons: [],
+        betweenSizes: null,
+        matchExplanation: "No sizing data available for either brand.",
+      };
+      if (debug_mode) {
+        nmiResponse.debug = {
+          detectedCategoryRaw,
+          normalizedCategory: category,
+          categoryFallbackUsed: false,
+          anchorBrand: anchor_brands[0]?.displayName || anchorBrandKey0,
+          anchorSize: anchorSizeLabel0,
+          anchorSizeType,
+          anchorScaleTrack,
+          targetBrandKey: target_brand_key,
+          targetBrandDisplayName: targetDisplayName,
+          targetSizeScale,
+          availableSizes,
+          fitPreference: fit_preference || "true_to_size",
+          targetFitTendency,
+          trackUsed,
+          targetTracksAvailable,
+          conversionFallbackUsed: false,
+          keyDimensionsList: getMeasurementKeys(nmiCategory),
+          usedFallback: false,
+          usedEstimatedMeasurements: false,
+          matchExplanation: "No sizing data available for either brand.",
+          betweenSizes: null,
+          targetRowUsed: null,
+          sizeDetails: {},
+          targetRowsConsidered: 0,
+        };
+      }
+      return new Response(
+        JSON.stringify(nmiResponse),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // 4. Determine recommended size
     let recommendedSize: string = "";
     let fitNotes: string | null = null;
