@@ -291,6 +291,32 @@ Deno.serve(async (req) => {
       );
     }
 
+    // ── Debug connectivity probe ──────────────────────────────────
+    let body: Record<string, unknown> = {};
+    try { body = await req.json(); } catch { /* no body or not JSON */ }
+
+    if (body.debug === true) {
+      const last4 = airtableBaseId.slice(-4);
+      console.log(`[DEBUG] base_id=...${last4}, table="${airtableTableName}"`);
+      try {
+        const probeUrl = `https://api.airtable.com/v0/${airtableBaseId}/${encodeURIComponent(airtableTableName)}?maxRecords=1`;
+        const probeRes = await fetch(probeUrl, { headers: { Authorization: `Bearer ${airtableApiKey}` } });
+        const probeOk = probeRes.ok;
+        const probeBody = await probeRes.text();
+        const recordCount = probeOk ? (JSON.parse(probeBody).records?.length ?? 0) : 0;
+        console.log(`[DEBUG] probe status=${probeRes.status}, records=${recordCount}`);
+        return new Response(
+          JSON.stringify({ debug: true, base_id_last4: last4, table: airtableTableName, probe_status: probeRes.status, sample_record_found: recordCount > 0, probe_body: probeOk ? undefined : probeBody }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ debug: true, base_id_last4: last4, table: airtableTableName, probe_error: (e as Error).message }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
