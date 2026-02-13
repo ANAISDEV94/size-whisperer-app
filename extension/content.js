@@ -95,14 +95,25 @@ const REVOLVE_BRAND_SELECTORS = [
   // JSON-LD fallback handled separately
 ];
 
-// ── Category inference from URL path keywords ─────────────────────
+// ── Normalized category enum ──────────────────────────────────────
+// Valid categories: tops, bottoms, dresses, denim, swim, outerwear
 const CATEGORY_KEYWORDS = {
-  tops: ["top", "blouse", "shirt", "tee", "tank", "cami", "bodysuit", "sweater", "hoodie", "pullover", "cardigan"],
-  bottoms: ["pant", "jean", "denim", "trouser", "short", "skirt", "legging"],
-  dresses: ["dress", "gown", "maxi", "mini", "midi"],
-  outerwear: ["jacket", "coat", "blazer", "vest"],
-  swimwear: ["swim", "bikini", "one-piece"],
-  activewear: ["sports-bra", "workout", "active", "yoga"],
+  denim: ["jean", "denim", "selvage", "selvedge", "rigid-denim", "raw-denim"],
+  swim: ["swim", "bikini", "one-piece", "swimsuit", "swimwear"],
+  dresses: ["dress", "gown", "maxi-dress", "mini-dress", "midi-dress", "romper", "jumpsuit"],
+  outerwear: ["jacket", "coat", "blazer", "vest", "puffer", "parka", "trench"],
+  bottoms: ["pant", "trouser", "short", "skirt", "legging", "cargo", "chino", "jogger"],
+  tops: ["top", "blouse", "shirt", "tee", "tank", "cami", "bodysuit", "sweater", "hoodie", "pullover", "cardigan", "crop-top", "bra", "sports-bra"],
+};
+
+// Keywords to scan in DOM text for category signals
+const DOM_CATEGORY_SIGNALS = {
+  denim: ["denim", "jeans", "jean", "selvage", "selvedge", "raw denim", "stretch denim", "rigid denim"],
+  swim: ["swimwear", "bikini", "swim", "one-piece", "swimsuit", "coverup"],
+  dresses: ["dress", "gown", "romper", "jumpsuit"],
+  outerwear: ["jacket", "coat", "blazer", "puffer", "parka", "trench"],
+  bottoms: ["pant", "trouser", "shorts", "skirt", "leggings", "jogger", "cargo"],
+  tops: ["top", "blouse", "shirt", "tee", "tank", "cami", "bodysuit", "sweater", "hoodie", "cardigan", "sports bra", "bralette"],
 };
 
 // ── Widget dimensions (must match FloatingWidget.tsx) ─────────────
@@ -224,12 +235,63 @@ function detectBrand() {
 }
 
 function inferCategory() {
+  // 1. URL path keywords (highest priority — most reliable)
   const path = location.pathname.toLowerCase();
   for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
     for (const kw of keywords) {
-      if (path.includes(kw)) return category;
+      if (path.includes(kw)) {
+        log("Category from URL:", category, "(keyword:", kw + ")");
+        return category;
+      }
     }
   }
+
+  // 2. Breadcrumb / category nav text
+  const breadcrumbSelectors = [
+    'nav[aria-label="breadcrumb"]',
+    '.breadcrumb', '.breadcrumbs',
+    '[class*="breadcrumb"]',
+    '.product-category',
+    '[itemprop="category"]',
+  ];
+  for (const sel of breadcrumbSelectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      const text = (el.textContent || "").toLowerCase();
+      for (const [category, signals] of Object.entries(DOM_CATEGORY_SIGNALS)) {
+        for (const signal of signals) {
+          if (text.includes(signal)) {
+            log("Category from breadcrumb:", category, "(signal:", signal + ")");
+            return category;
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Product details / description text
+  const detailSelectors = [
+    '.product-details', '.product-description',
+    '[class*="product-info"]', '[class*="pdp-"]',
+    '.product-name', 'h1',
+    '[itemprop="name"]', '[itemprop="description"]',
+  ];
+  for (const sel of detailSelectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      const text = (el.textContent || "").toLowerCase();
+      for (const [category, signals] of Object.entries(DOM_CATEGORY_SIGNALS)) {
+        for (const signal of signals) {
+          if (text.includes(signal)) {
+            log("Category from product details:", category, "(signal:", signal + ")");
+            return category;
+          }
+        }
+      }
+    }
+  }
+
+  log("Category detection: no match, defaulting to tops");
   return "tops";
 }
 

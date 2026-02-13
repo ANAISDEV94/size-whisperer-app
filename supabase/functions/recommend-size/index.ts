@@ -66,20 +66,21 @@ interface SizingRow {
   fit_notes: string | null;
 }
 
-// Category-to-measurement priority mapping
+// Category-to-measurement priority mapping (aligned with extension enum)
 const CATEGORY_MEASUREMENT_KEYS: Record<string, string[]> = {
-  tops: ["bust", "waist", "shoulders", "sleeve_length"],
-  dresses: ["bust", "waist", "hips", "shoulders"],
-  jeans: ["waist", "hips", "thigh", "rise"],
-  denim: ["waist", "hips", "thigh", "rise"],
-  shorts: ["waist", "hips", "thigh", "rise"],
+  tops: ["bust", "waist"],
+  bottoms: ["waist", "hips"],
+  denim: ["waist", "hips", "rise"],
+  dresses: ["bust", "waist", "hips"],
+  swim: ["bust", "waist", "hips", "underbust"],
+  outerwear: ["bust", "waist", "shoulders"],
+  // Legacy aliases still supported
+  jeans: ["waist", "hips", "rise"],
+  shorts: ["waist", "hips"],
   skirts: ["waist", "hips"],
   swimwear: ["bust", "waist", "hips", "underbust"],
   "sports bras": ["bust", "underbust"],
-  bodysuits: ["bust", "waist", "hips", "underbust"],
-  shapewear: ["bust", "waist", "hips", "underbust"],
-  underwear: ["waist", "hips"],
-  loungewear: ["bust", "waist", "hips"],
+  bodysuits: ["bust", "waist", "hips"],
   default: ["bust", "waist", "hips"],
 };
 
@@ -824,8 +825,9 @@ Deno.serve(async (req) => {
     // ── Determine which measurement to ask for by category ──────
     function getAskForMeasurement(cat: string): string {
       const lower = cat.toLowerCase();
-      if (["jeans", "denim", "shorts", "skirts"].includes(lower)) return "waist";
-      return "bust"; // tops, dresses, default
+      if (["jeans", "denim", "shorts", "skirts", "bottoms"].includes(lower)) return "waist";
+      if (["swim", "swimwear"].includes(lower)) return "bust";
+      return "bust"; // tops, dresses, outerwear, default
     }
 
     // ── Hard guardrails ─────────────────────────────────────────
