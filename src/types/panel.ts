@@ -60,6 +60,10 @@ export interface DebugTrace {
   fitPreference: string;
   targetFitTendency: string | null;
   anchorSizeSystem?: string;
+  anchorSizeType?: string;
+  anchorRowChosen?: { sizeLabel: string; measurements: Record<string, unknown> | null } | null;
+  targetSizeTypeSearched?: string;
+  conversionFallbackUsed?: boolean;
   sizeSystemFilterUsed?: string;
   targetRowsBeforeSystemFilter?: number;
   targetRowsAfterSystemFilter?: number;
