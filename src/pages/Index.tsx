@@ -1,10 +1,12 @@
 import ExtensionPanel from "@/components/panel/ExtensionPanel";
+import SmokeTestRunner from "@/components/panel/SmokeTestRunner";
 
 const params = new URLSearchParams(window.location.search);
 const isEmbedded =
   window.location !== window.parent.location ||
   params.get("embedded") === "1" ||
   params.get("source") === "extension";
+const isDebug = params.get("debug") === "1";
 
 // Add embedded class to html + body for solid dark background
 if (isEmbedded) {
@@ -33,6 +35,7 @@ const Index = () => {
       </div>
 
       <ExtensionPanel />
+      {isDebug && <SmokeTestRunner />}
     </div>
   );
 };
