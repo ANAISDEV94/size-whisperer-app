@@ -141,7 +141,10 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
                   {i === 0 ? "🏆 " : ""}{s.size}
                 </span>
                 <span className="text-muted-foreground">
-                  avg dev: {s.score.toFixed(2)}″ ({s.matched} dims)
+                  avg dist: {s.score.toFixed(2)}″ ({s.matched} dims)
+                  {s.totalOverlap !== undefined && s.totalOverlap > 0 && (
+                    <span className="text-green-400 ml-1">overlap: {s.totalOverlap.toFixed(1)}″</span>
+                  )}
                 </span>
               </div>
               {s.deviations && s.deviations.length > 0 && (
@@ -150,10 +153,10 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
                     <div key={j} className="flex justify-between text-muted-foreground">
                       <span>{d.dimension}</span>
                       <span>
-                        user: {d.userMidpoint.toFixed(1)}″ → [{d.targetMin.toFixed(1)}-{d.targetMax.toFixed(1)}]
+                        [{d.userMin?.toFixed(1)}-{d.userMax?.toFixed(1)}] → [{d.targetMin.toFixed(1)}-{d.targetMax.toFixed(1)}]
                         {d.insideRange
-                          ? <span className="text-green-400 ml-1">✓ in range</span>
-                          : <span className="text-yellow-400 ml-1">dev: {d.deviation.toFixed(2)}″</span>
+                          ? <span className="text-green-400 ml-1">✓ overlap {d.overlap?.toFixed(1)}″</span>
+                          : <span className="text-yellow-400 ml-1">gap: {d.deviation.toFixed(2)}″</span>
                         }
                       </span>
                     </div>

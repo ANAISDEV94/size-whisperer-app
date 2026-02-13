@@ -42,10 +42,13 @@ export interface ConfidenceInfo {
 
 export interface DimensionDeviation {
   dimension: string;
+  userMin: number;
+  userMax: number;
   userMidpoint: number;
   targetMin: number;
   targetMax: number;
   deviation: number;
+  overlap: number;
   insideRange: boolean;
 }
 
@@ -86,8 +89,8 @@ export interface DebugTrace {
     measurements: Record<string, unknown> | null;
     fit_notes: string | null;
   } | null;
-  top3Candidates: { size: string; score: number; matched: number; deviations?: DimensionDeviation[] }[];
-  allSizeScores: { size: string; score: number; matched: number; deviations?: DimensionDeviation[] }[];
+  top3Candidates: { size: string; score: number; matched: number; totalOverlap?: number; deviations?: DimensionDeviation[] }[];
+  allSizeScores: { size: string; score: number; matched: number; totalOverlap?: number; deviations?: DimensionDeviation[] }[];
   comparisonLogic: string[];
 }
 
