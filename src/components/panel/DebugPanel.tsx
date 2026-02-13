@@ -33,8 +33,14 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
 
       {/* Category & detection source */}
       <Section title="Detected category">
-        <Val>{debug.detectedCategory}</Val>
+        <Val>{debug.normalizedCategory || debug.detectedCategory}</Val>
+        {debug.detectedCategoryRaw && debug.detectedCategoryRaw !== (debug.normalizedCategory || debug.detectedCategory) && (
+          <div className="text-muted-foreground mt-0.5">Raw: {debug.detectedCategoryRaw}</div>
+        )}
         <div className="text-muted-foreground mt-0.5">Source: {debug.detectionSource}</div>
+        {debug.airtableCategoryMatchesCount !== undefined && (
+          <div className="text-muted-foreground mt-0.5">Chart rows for category: {debug.airtableCategoryMatchesCount}</div>
+        )}
       </Section>
 
       {/* Anchor brand */}
@@ -84,6 +90,24 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
         <div className="text-muted-foreground mt-0.5">
           Scale: {debug.targetSizeScale} | Denim: {debug.isDenimScale ? "yes" : "no"} | Fallback: {debug.usedFallback ? "yes" : "no"} | Est. body: {debug.usedEstimatedMeasurements ? "yes" : "no"}
         </div>
+        {debug.anchorSizeSystem && (
+          <div className="text-muted-foreground mt-0.5">
+            Anchor size system: <span className="text-foreground">{debug.anchorSizeSystem}</span>
+            {debug.sizeSystemFilterUsed && debug.sizeSystemFilterUsed !== debug.anchorSizeSystem && (
+              <> (filter: {debug.sizeSystemFilterUsed})</>
+            )}
+          </div>
+        )}
+        {debug.targetRowsFilteredOut !== undefined && debug.targetRowsFilteredOut > 0 && (
+          <div className="text-yellow-400 mt-0.5">
+            ⚠ {debug.targetRowsFilteredOut} row(s) filtered out due to size system mismatch
+          </div>
+        )}
+        {debug.targetRowsAfterSystemFilter !== undefined && (
+          <div className="text-muted-foreground mt-0.5">
+            Candidate rows after system filter: {debug.targetRowsAfterSystemFilter}
+          </div>
+        )}
       </Section>
 
       {/* Top 3 candidate sizes */}

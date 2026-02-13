@@ -19,18 +19,22 @@ function sizeIndex(size: string): number {
   return -1;
 }
 
-// Infer size scale from the size label itself
+// Infer size system from the size label itself
 const LETTER_REGEX = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|XXXS|2X|3X|4X)$/i;
-function inferSizeScaleFromLabel(sizeLabel: string): string {
+const DENIM_WAIST_REGEX = /^W?(\d{2})$/i; // matches "W24", "W25", "24", "25" etc.
+
+function inferSizeSystem(sizeLabel: string): string {
   const trimmed = sizeLabel.trim();
   if (LETTER_REGEX.test(trimmed)) return "letter";
-  // Denim waist sizes: 22-40
-  if (/^\d{2}$/.test(trimmed)) {
-    const n = parseInt(trimmed, 10);
-    if (n >= 22 && n <= 40) return "denim";
+  // Denim waist sizes: W22-W36 or plain 22-36
+  const denimMatch = trimmed.match(DENIM_WAIST_REGEX);
+  if (denimMatch) {
+    const n = parseInt(denimMatch[1], 10);
+    if (n >= 22 && n <= 36) return "denim_waist";
   }
-  if (/^\d+$/.test(trimmed)) return "numeric";
-  return "other";
+  // Numeric US sizes (0, 2, 4, 6, 8, 10, etc.) or ranges like "8-10"
+  if (/^\d+(-\d+)?$/.test(trimmed)) return "numeric";
+  return "unknown";
 }
 
 function sizeUp(size: string): string | null {
@@ -733,10 +737,10 @@ Deno.serve(async (req) => {
     const targetSizeScale = targetBrand?.size_scale || "letter";
     const availableSizes: string[] = (targetBrand?.available_sizes as string[]) || [];
 
-    // 1b. Determine anchor size scale from the label itself
+    // 1b. Determine anchor size system from the label itself
     const anchorBrandKey0 = anchor_brands[0]?.brandKey;
     const anchorSizeLabel0 = anchor_brands[0]?.size || "";
-    const anchorSizeScale = inferSizeScaleFromLabel(anchorSizeLabel0);
+    const anchorSizeSystem = inferSizeSystem(anchorSizeLabel0);
 
     // 2. Normalize category
     const detectedCategoryRaw = target_category || "tops";
@@ -747,12 +751,14 @@ Deno.serve(async (req) => {
       .eq("brand_key", target_brand_key)
       .eq("category", category);
 
-    // Filter target rows to only matching scale
+    // Filter target rows to only matching size system — NEVER compare across systems
+    const sizeSystemForFilter = anchorSizeSystem === "denim_waist" ? "denim" : anchorSizeSystem;
     const targetSizingData = (targetSizingDataRaw || []).filter(
-      (r: { size_scale?: string }) => r.size_scale === anchorSizeScale
+      (r: { size_scale?: string }) => r.size_scale === sizeSystemForFilter
     );
     const targetRowsBeforeFilter = targetSizingDataRaw?.length || 0;
     const targetRowsAfterFilter = targetSizingData.length;
+    const targetRowsFilteredOut = targetRowsBeforeFilter - targetRowsAfterFilter;
 
     // 3. Fetch anchor brand sizing data — filtered to anchor's size scale
     const anchorBrandKeys = anchor_brands.map((a: { brandKey: string }) => a.brandKey);
@@ -762,9 +768,9 @@ Deno.serve(async (req) => {
       .in("brand_key", anchorBrandKeys)
       .eq("category", category);
 
-    // Filter anchor rows to matching scale
+    // Filter anchor rows to matching size system
     const anchorSizingData = (anchorSizingDataRaw || []).filter(
-      (r: { size_scale?: string }) => r.size_scale === anchorSizeScale
+      (r: { size_scale?: string }) => r.size_scale === sizeSystemForFilter
     );
 
     // 4. Determine recommended size
@@ -774,7 +780,7 @@ Deno.serve(async (req) => {
     let usedEstimated = false;
     let closestResult: ClosestSizeResult | null = null;
     const isSameBrand = anchorBrandKey0 === target_brand_key;
-    const isSameScale = anchorSizeScale === targetSizeScale;
+    const isSameScale = sizeSystemForFilter === targetSizeScale;
 
     let needMoreInfoEarly = false;
 
@@ -806,9 +812,9 @@ Deno.serve(async (req) => {
     } else {
       // ── CROSS-BRAND LOGIC ───────────────────────────────────────
 
-      // Guard: if scale filter removed all target rows, return NEED_MORE_INFO
+      // Guard: if size system filter removed all target rows, return NEED_MORE_INFO
+      // DO NOT auto-convert to another system
       if (targetRowsAfterFilter === 0 && targetRowsBeforeFilter > 0) {
-        // Target brand has sizing data but none in the anchor's scale
         needMoreInfoEarly = true;
       }
 
@@ -870,23 +876,26 @@ Deno.serve(async (req) => {
             fitNotes = closestResult.fitNotes;
           } else {
             usedFallback = true;
-            recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeScale);
+            recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, sizeSystemForFilter);
           }
         } else {
           usedFallback = true;
-          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeScale);
+          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, sizeSystemForFilter);
         }
       } else {
         usedFallback = true;
-        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeScale);
+        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, sizeSystemForFilter);
       }
 
-      // Final snap — only within same-scale available sizes
-      const sameScaleAvailable = availableSizes.filter(s => inferSizeScaleFromLabel(s) === anchorSizeScale);
-      if (sameScaleAvailable.length) {
-        recommendedSize = snapToAvailableSize(recommendedSize, sameScaleAvailable, fit_preference || "true_to_size", target_brand_key);
+      // Final snap — only within same size system
+      const sameSystemAvailable = availableSizes.filter(s => {
+        const sys = inferSizeSystem(s);
+        return sys === anchorSizeSystem || (anchorSizeSystem === "denim_waist" && sys === "numeric");
+      });
+      if (sameSystemAvailable.length) {
+        recommendedSize = snapToAvailableSize(recommendedSize, sameSystemAvailable, fit_preference || "true_to_size", target_brand_key);
       } else if (availableSizes.length) {
-        // Fallback: snap to all available if no same-scale sizes exist
+        // Fallback: snap to all available if no same-system sizes exist
         recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
       }
     }
@@ -899,9 +908,10 @@ Deno.serve(async (req) => {
     // ── Determine which measurement to ask for by category ──────
     function getAskForMeasurement(cat: string): string {
       const lower = cat.toLowerCase();
-      if (["jeans", "denim", "shorts", "skirts", "bottoms"].includes(lower)) return "waist";
-      if (["swim", "swimwear", "sports bras"].includes(lower)) return "underbust";
-      return "bust"; // tops, dresses, outerwear, default
+      if (["denim", "bottoms"].includes(lower)) return "waist";
+      if (["dresses"].includes(lower)) return "hips";
+      if (["swim", "sports_bras"].includes(lower)) return "underbust";
+      return "bust"; // tops, outerwear, default
     }
 
     // ── Hard guardrails ─────────────────────────────────────────
@@ -910,11 +920,11 @@ Deno.serve(async (req) => {
     let needMoreInfoReason = "";
     let needMoreInfoAskFor = "";
 
-    // Rule 0: scale filter eliminated all target rows
+    // Rule 0: size system filter eliminated all target rows — DO NOT auto-convert
     if (needMoreInfoEarly) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
-      needMoreInfoReason = `No sizing data available in ${anchorSizeScale} scale for this brand`;
+      needMoreInfoReason = `No sizing data available in ${anchorSizeSystem} size system for this brand`;
     }
 
     // Rule 1: confidence < 70 → NEED_MORE_INFO (covers matchedKeys < 2 and high deviation)
@@ -926,12 +936,13 @@ Deno.serve(async (req) => {
         : `Measurement deviation too high (${avgDeviation.toFixed(2)}″) for a reliable recommendation`;
     }
 
-    // Rule 2: never default to extreme/smallest size
-    if (!needMoreInfo && isExtremeSize && confidence.score < 95) {
+    // Rule 2: never default to extreme/smallest size UNLESS anchor was already XXS/XXXS
+    const anchorIsExtreme = ["XXS", "XXXS", "00"].includes(anchorSizeLabel0.toUpperCase().trim());
+    if (!needMoreInfo && isExtremeSize && !anchorIsExtreme && confidence.score < 95) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
       needMoreInfoReason = `Extreme size (${recommendedSize}) requires very high confidence`;
-      confidence.reasons.push("Blocked extreme size — confidence below 95%");
+      confidence.reasons.push("Blocked extreme size — confidence below 95% and anchor was not extreme");
     }
 
     // Rule 3: brand_source=fallback + confidence < 85 → NEED_MORE_INFO
@@ -1100,9 +1111,11 @@ Deno.serve(async (req) => {
         availableSizes,
         fitPreference: fit_preference || "true_to_size",
         targetFitTendency,
-        anchorSizeScale,
-        targetRowsBeforeScaleFilter: targetRowsBeforeFilter,
-        targetRowsAfterScaleFilter: targetRowsAfterFilter,
+        anchorSizeSystem,
+        sizeSystemFilterUsed: sizeSystemForFilter,
+        targetRowsBeforeSystemFilter: targetRowsBeforeFilter,
+        targetRowsAfterSystemFilter: targetRowsAfterFilter,
+        targetRowsFilteredOut,
         isDenimScale: false,
         usedFallback,
         usedEstimatedMeasurements: usedEstimated,
