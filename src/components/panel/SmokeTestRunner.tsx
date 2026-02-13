@@ -106,6 +106,39 @@ const SCENARIOS: Scenario[] = [
       return { status: "pass", message: `Got ${size} via range containment` };
     },
   },
+  {
+    name: "F: Alo M → Reformation tops: no measurements → no body numbers in bullets",
+    input: {
+      anchor_brands: [{ brandKey: "alo_yoga", displayName: "Alo Yoga", size: "M" }],
+      fit_preference: "true_to_size",
+      target_brand_key: "reformation",
+      target_category: "tops",
+    },
+    validate: (d) => {
+      if (d.needMoreInfo) return { status: "warn", message: "Need more info triggered (acceptable)" };
+      const bullets = d.bullets as string[] || [];
+      const hasNumbers = bullets.some((b: string) => /\d+(\.\d+)?\s*("|″|inch|inches|cm)\b/i.test(b) || /\b(bust|waist|hips|underbust)\b.*\d/i.test(b));
+      if (hasNumbers) return { status: "fail", message: `Bullets reference body measurements without user input: ${bullets.join(" | ")}` };
+      return { status: "pass", message: `Bullets clean: ${bullets.join(" | ")}` };
+    },
+  },
+  {
+    name: "G: Zimmermann 1 → CSB tops: extreme jump guardrail",
+    input: {
+      anchor_brands: [{ brandKey: "zimmermann", displayName: "Zimmermann", size: "1" }],
+      fit_preference: "true_to_size",
+      target_brand_key: "csb",
+      target_category: "tops",
+    },
+    validate: (d) => {
+      if (d.needMoreInfo) return { status: "pass", message: "Correctly triggered need more info for potential extreme jump" };
+      const size = (d.size as string || "").toUpperCase();
+      // Zimmermann 1 ≈ XS/S range. If we get XL or larger, it's a failure.
+      const extreme = ["XL", "2X", "3X", "4X", "XXL", "12", "14", "16", "18", "20"];
+      if (extreme.includes(size)) return { status: "fail", message: `Extreme jump: Zimmermann 1 → ${size}` };
+      return { status: "pass", message: `Got ${size} (reasonable mapping)` };
+    },
+  },
 ];
 
 const SmokeTestRunner = () => {

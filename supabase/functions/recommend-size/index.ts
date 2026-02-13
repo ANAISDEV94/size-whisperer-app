@@ -613,12 +613,22 @@ interface BulletContext {
   productFitSummary: string | null;
   matchExplanation: string;
   betweenSizes: [string, string] | null;
+  hasMeasurements: boolean;
+  hasWeightHeight: boolean;
 }
 
 async function generateBullets(context: BulletContext): Promise<string[]> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) return generateFallbackBullets(context);
   try {
+    const measurementRule = context.hasMeasurements
+      ? `- Second bullet may reference how the user's measurements align with this size`
+      : `- CRITICAL: The user has NOT provided any body measurements. Do NOT mention inches, cm, bust, waist, hips, or any specific body measurements. Instead, reference brand sizing data and cross-brand mapping.`;
+
+    const weightRule = context.hasWeightHeight
+      ? ``
+      : `- Do NOT mention weight or height — the user has not provided these.`;
+
     const prompt = `You are a sizing expert for a women's fashion sizing tool called ALTAANA. Generate exactly 3 short, helpful bullet points explaining why we recommend size "${context.recommendedSize}" in ${context.targetBrand}.
 
 Context:
@@ -627,17 +637,18 @@ Context:
 ${context.fitNotes ? `- Brand fit notes: ${context.fitNotes}` : ""}
 ${context.targetFitTendency ? `- ${context.targetBrand} generally ${context.targetFitTendency.replace(/_/g, " ")}` : ""}
 ${context.productFitSummary ? `- This specific product: ${context.productFitSummary}` : ""}
-- Match result: ${context.matchExplanation}
 ${context.betweenSizes ? `- User is between sizes ${context.betweenSizes[0]} and ${context.betweenSizes[1]}` : ""}
 
 Rules:
 - Each bullet must be under 15 words
 - First bullet references what they wear in their anchor brand
-- Second bullet explains the measurement match clearly
+${measurementRule}
+${weightRule}
 - Third bullet: ONLY mention fabric/stretch if productFitSummary contains fabric info. Otherwise mention fit preference or brand tendency.
 - Be definitive and confident
 - Do NOT use bullet point characters, just return plain text
-- Do NOT invent fabric claims`;
+- Do NOT invent fabric claims
+- Do NOT invent body measurements the user never provided`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -688,8 +699,10 @@ function generateFallbackBullets(context: BulletContext): string[] {
 
   if (context.betweenSizes) {
     bullets.push(`You're between ${context.betweenSizes[0]} and ${context.betweenSizes[1]}; ${context.recommendedSize} is the better fit`);
-  } else {
+  } else if (context.hasMeasurements) {
     bullets.push(`Your measurements fall within ${context.recommendedSize} for this brand`);
+  } else {
+    bullets.push(`${context.recommendedSize} aligns with your size based on brand sizing data`);
   }
 
   const hasFabric = context.productFitSummary && /stretch|elastane|spandex|silk|cotton/i.test(context.productFitSummary);
@@ -964,6 +977,62 @@ Deno.serve(async (req) => {
       );
     }
 
+    // ── GUARD: Target brand exists but has no data for THIS category ──
+    if (allTargetRows.length === 0 && anchorSizingDataAll.length > 0 && targetBrand) {
+      // The target brand is in our catalog but has no sizing chart rows for this category
+      const askFor = getMeasurementKeys(category)[0] || "bust";
+      try {
+        await supabase.from("recommendation_runs").insert({
+          user_id: user_id || null,
+          target_brand: target_brand_key,
+          category,
+          product_url: product_url || null,
+          anchor_brand: anchor_brands[0]?.brandKey || "unknown",
+          anchor_size: anchor_brands[0]?.size || "unknown",
+          output_status: "NEED_MORE_INFO",
+          recommended_size: null,
+          confidence: 0,
+          coverage: 0,
+          fallback_used: false,
+          reason: "no_brand_data_for_category",
+        });
+      } catch (auditErr) {
+        console.error("Failed to log recommendation run:", auditErr);
+      }
+      const nmiResponse: Record<string, unknown> = {
+        size: null,
+        brandName: targetDisplayName,
+        sizeScale: targetSizeScale,
+        needMoreInfo: true,
+        reason: "no_brand_data_for_category",
+        ask_for: askFor,
+        bullets: [
+          `We don't have ${category.replace(/_/g, " ")} sizing data for ${targetDisplayName} yet`,
+          "Add another brand you've worn to help calibrate",
+          "Or boost accuracy with optional weight and height",
+        ],
+        comparisons: [],
+        betweenSizes: null,
+        matchExplanation: `No sizing data available for ${targetDisplayName} in the ${category} category.`,
+      };
+      if (debug_mode) {
+        nmiResponse.debug = {
+          detectedCategoryRaw, normalizedCategory: category, categoryFallbackUsed: false,
+          anchorBrand: anchor_brands[0]?.displayName || anchorBrandKey0, anchorSize: anchorSizeLabel0,
+          anchorSizeType, anchorScaleTrack,
+          targetBrandKey: target_brand_key, targetBrandDisplayName: targetDisplayName,
+          targetSizeScale, availableSizes,
+          fitPreference: fit_preference || "true_to_size", targetFitTendency,
+          trackUsed, targetTracksAvailable, conversionFallbackUsed: false,
+          keyDimensionsList: getMeasurementKeys(category),
+          usedFallback: false, usedEstimatedMeasurements: false,
+          matchExplanation: nmiResponse.matchExplanation, betweenSizes: null,
+          targetRowUsed: null, sizeDetails: {}, targetRowsConsidered: 0,
+        };
+      }
+      return new Response(JSON.stringify(nmiResponse), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     // 4. Determine recommended size
     let recommendedSize: string = "";
     let fitNotes: string | null = null;
@@ -1076,9 +1145,73 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── EXTREME JUMP GUARDRAIL ──────────────────────────────────
+    // If the recommended size is more than 2 standard steps away from
+    // the anchor size, trigger needMoreInfo UNLESS we have strong
+    // containment data (full containment on 2+ dimensions).
+    if (!isSameBrand && recommendedSize) {
+      const anchorIdx = getUniversalIndex(anchorSizeLabel0, anchorBrandKey0);
+      const recIdx = getUniversalIndex(recommendedSize, target_brand_key);
+      const MAX_STEP_JUMP = 2;
+      // Determine if containment is "strong" (all checked dims contained, at least 2)
+      const hasStrongContainment = containmentResult?.exactMatch &&
+        !usedFallback &&
+        containmentResult.targetRowUsed?.measurements &&
+        Object.keys(normalizeMeasurements(containmentResult.targetRowUsed.measurements as Record<string, unknown>)).length >= 2;
+      if (anchorIdx !== -1 && recIdx !== -1 && Math.abs(recIdx - anchorIdx) > MAX_STEP_JUMP && !hasStrongContainment) {
+        // Extreme jump detected with weak data — trigger needMoreInfo
+        const askFor = getMeasurementKeys(category)[0] || "bust";
+        try {
+          await supabase.from("recommendation_runs").insert({
+            user_id: user_id || null, target_brand: target_brand_key, category,
+            product_url: product_url || null,
+            anchor_brand: anchor_brands[0]?.brandKey || "unknown",
+            anchor_size: anchor_brands[0]?.size || "unknown",
+            output_status: "NEED_MORE_INFO", recommended_size: recommendedSize,
+            confidence: 0, coverage: 0, fallback_used: true,
+            reason: "extreme_jump_guardrail",
+          });
+        } catch (auditErr) { console.error("Failed to log:", auditErr); }
+
+        const nmiResponse: Record<string, unknown> = {
+          size: null, brandName: targetDisplayName, sizeScale: targetSizeScale,
+          needMoreInfo: true, reason: "extreme_jump_guardrail", ask_for: askFor,
+          bullets: [
+            `Size mapping between ${anchor_brands[0]?.displayName || "your brand"} and ${targetDisplayName} needs more data`,
+            "Add another brand you've worn for a more accurate recommendation",
+            "Or boost accuracy with optional weight and height",
+          ],
+          comparisons: [], betweenSizes: null,
+          matchExplanation: `Mapping jump too large (${anchorSizeLabel0} → ${recommendedSize}) without strong supporting data.`,
+        };
+        if (debug_mode) {
+          nmiResponse.debug = {
+            detectedCategoryRaw, normalizedCategory: category, categoryFallbackUsed,
+            anchorBrand: anchor_brands[0]?.displayName || anchorBrandKey0, anchorSize: anchorSizeLabel0,
+            anchorSizeType, anchorScaleTrack,
+            targetBrandKey: target_brand_key, targetBrandDisplayName: targetDisplayName,
+            targetSizeScale, availableSizes,
+            fitPreference: fit_preference || "true_to_size", targetFitTendency,
+            trackUsed, targetTracksAvailable, conversionFallbackUsed,
+            keyDimensionsList: getMeasurementKeys(category),
+            usedFallback: true, usedEstimatedMeasurements: usedEstimated,
+            matchExplanation: nmiResponse.matchExplanation, betweenSizes: null,
+            targetRowUsed: null, sizeDetails: containmentResult?.sizeDetails || {},
+            targetRowsConsidered: targetSizingData.length,
+            extremeJump: { anchorIdx, recIdx, jump: Math.abs(recIdx - anchorIdx) },
+          };
+        }
+        return new Response(JSON.stringify(nmiResponse), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+    }
+
     // ── Build match explanation ──────────────────────────────────
     const matchExplanation = containmentResult?.matchExplanation || (isSameBrand ? "Same brand — direct size match" : "Mapped via size index");
     const betweenSizes = containmentResult?.betweenSizes || null;
+
+    // Track whether user actually provided measurements
+    const userProvidedMeasurements = !!(weight || height) && usedEstimated;
+    const hasAnchorMeasurementData = !!(anchorSizingData?.length > 0 && containmentResult && !usedFallback);
 
     // 5. Scrape product-specific fit info if URL provided
     let productFitSummary: string | null = null;
@@ -1097,6 +1230,8 @@ Deno.serve(async (req) => {
       productFitSummary,
       matchExplanation,
       betweenSizes,
+      hasMeasurements: userProvidedMeasurements || hasAnchorMeasurementData,
+      hasWeightHeight: !!(weight || height),
     });
 
     // 7. Generate comparisons
