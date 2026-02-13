@@ -38,8 +38,11 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
           <div className="text-muted-foreground mt-0.5">Raw: {debug.detectedCategoryRaw}</div>
         )}
         <div className="text-muted-foreground mt-0.5">Source: {debug.detectionSource}</div>
+        {debug.categoryFallbackUsed && (
+          <div className="text-yellow-400 mt-0.5">⚠ Category not found — used brand-only fallback</div>
+        )}
         {debug.airtableCategoryMatchesCount !== undefined && (
-          <div className="text-muted-foreground mt-0.5">Chart rows for category: {debug.airtableCategoryMatchesCount}</div>
+          <div className="text-muted-foreground mt-0.5">Chart rows for brand: {debug.airtableCategoryMatchesCount}</div>
         )}
       </Section>
 

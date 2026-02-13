@@ -69,19 +69,20 @@ function toBrandKey(name: string): string {
 // ── Category normalization ───────────────────────────────────────
 const CATEGORY_ALIAS_MAP: Record<string, string> = {
   tops: "tops", top: "tops",
-  bottoms: "bottoms", bottom: "bottoms",
+  bottoms: "bottoms", bottom: "bottoms", pants: "bottoms", shorts: "bottoms", skirts: "bottoms",
   denim: "denim", jeans: "denim",
   dresses: "dresses", dress: "dresses",
-  swim: "swim", swimwear: "swim", "one-piece swimsuits": "swim",
-  "sports bras": "sports_bras", "sports_bras": "sports_bras",
-  outerwear: "outerwear",
-  shorts: "bottoms", skirts: "bottoms",
+  swim: "swim", swimwear: "swim", "one-piece swimsuits": "swim", "one_piece_swimsuits": "swim",
+  "sports bras": "sports_bras", "sports_bras": "sports_bras", bras: "sports_bras",
+  outerwear: "outerwear", jackets: "outerwear",
   bodysuits: "bodysuits",
 };
 
 function normalizeCategorySync(raw: string): string {
   const lower = raw.toLowerCase().trim();
-  return CATEGORY_ALIAS_MAP[lower] || lower;
+  if (CATEGORY_ALIAS_MAP[lower]) return CATEGORY_ALIAS_MAP[lower];
+  // Convert any remaining spaces/punctuation to underscores for consistency
+  return lower.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 }
 
 // ── Size scale detection ────────────────────────────────────────
