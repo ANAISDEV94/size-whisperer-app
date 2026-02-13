@@ -8,9 +8,19 @@ interface UseRecommendationReturn {
   isLoading: boolean;
   error: string | null;
   debugMode: boolean;
+  debugAllowed: boolean;
   setDebugMode: (v: boolean) => void;
   fetchRecommendation: (profile: UserProfile, targetBrandKey: string, targetCategory: string, userId?: string, productUrl?: string, weight?: string, height?: string) => Promise<void>;
   logAdjustment: (action: "size_down" | "keep" | "size_up", finalSize: string) => Promise<void>;
+}
+
+// Debug mode is enabled via URL ?debug=1 or non-production env
+function isDebugAllowed(): boolean {
+  if (typeof window !== "undefined") {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("debug") === "1") return true;
+  }
+  return import.meta.env.MODE !== "production";
 }
 
 export function useRecommendation(): UseRecommendationReturn {
@@ -18,6 +28,7 @@ export function useRecommendation(): UseRecommendationReturn {
   const [recommendationId, setRecommendationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const debugAllowed = isDebugAllowed();
   const [debugMode, setDebugMode] = useState(false);
 
   const fetchRecommendation = useCallback(async (
@@ -47,7 +58,7 @@ export function useRecommendation(): UseRecommendationReturn {
           product_url: productUrl,
           weight: weight || undefined,
           height: height || undefined,
-          debug_mode: debugMode,
+          debug_mode: debugAllowed && debugMode,
         },
       });
 
@@ -88,5 +99,5 @@ export function useRecommendation(): UseRecommendationReturn {
     }
   }, [recommendationId]);
 
-  return { recommendation, recommendationId, isLoading, error, debugMode, setDebugMode, fetchRecommendation, logAdjustment };
+  return { recommendation, recommendationId, isLoading, error, debugMode, debugAllowed, setDebugMode, fetchRecommendation, logAdjustment };
 }

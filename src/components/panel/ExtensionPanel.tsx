@@ -52,7 +52,7 @@ if (isEmbedded) {
 
 const ExtensionPanel = () => {
   const { user, isLoading, signUp, signIn, signInWithGoogle, signOut } = useAuth();
-  const { recommendation, recommendationId, isLoading: recLoading, error: recError, debugMode, setDebugMode, fetchRecommendation, logAdjustment } = useRecommendation();
+  const { recommendation, recommendationId, isLoading: recLoading, error: recError, debugMode, debugAllowed, setDebugMode, fetchRecommendation, logAdjustment } = useRecommendation();
   const target = useTargetBrand();
   const { cached, save: saveConfirmation } = useConfirmationMemory(target.brandKey, target.productUrl);
 
@@ -291,7 +291,7 @@ const ExtensionPanel = () => {
               }
             }}
             debugMode={debugMode}
-            onToggleDebug={() => setDebugMode(!debugMode)}
+            onToggleDebug={debugAllowed ? () => setDebugMode(!debugMode) : undefined}
           />
           <div className="flex flex-col flex-1 overflow-hidden">
             {renderScreen()}
@@ -328,7 +328,7 @@ const ExtensionPanel = () => {
                 boxShadow: "none",
               }}
             >
-              <PanelHeader onClose={handleClose} debugMode={debugMode} onToggleDebug={() => setDebugMode(!debugMode)} />
+              <PanelHeader onClose={handleClose} debugMode={debugMode} onToggleDebug={debugAllowed ? () => setDebugMode(!debugMode) : undefined} />
               <AnimatePresence mode="wait">
                 <motion.div
                   key={panelState}
