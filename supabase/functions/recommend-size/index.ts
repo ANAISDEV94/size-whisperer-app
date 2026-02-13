@@ -104,10 +104,17 @@ function computeConfidence(
   totalKeys: number,
   usedFallback: boolean,
   usedEstimated: boolean,
-): ConfidenceResult {
+): ConfidenceResult & { measurementCoverage: number; distanceScore: number } {
   const reasons: string[] = [];
   let score = 100;
   let matchMethod: ConfidenceResult["matchMethod"] = "measurement";
+
+  // ── Coverage: how many key dimensions were matched ────────────
+  const measurementCoverage = matchedKeys;
+
+  // ── Distance score: normalized distance between anchor and target ─
+  // bestScore is avg absolute deviation in inches; normalize to 0-1 range (0=perfect)
+  const distanceScore = bestScore !== null ? Math.min(bestScore / 5, 1) : 1;
 
   if (usedFallback) {
     score -= 40;
@@ -125,16 +132,21 @@ function computeConfidence(
     reasons.push("No target brand sizing chart");
   }
 
-  if (matchedKeys < totalKeys && matchedKeys > 0) {
+  // Coverage penalty
+  if (measurementCoverage < 2) {
+    score -= 30;
+    reasons.push(`Only ${measurementCoverage} measurement dimension(s) matched — need at least 2`);
+  } else if (matchedKeys < totalKeys && matchedKeys > 0) {
     const pct = Math.round((1 - matchedKeys / totalKeys) * 20);
     score -= pct;
     reasons.push(`Only ${matchedKeys}/${totalKeys} measurement dimensions matched`);
   }
 
-  if (bestScore !== null && bestScore > 2) {
-    const penalty = Math.min(20, Math.round(bestScore * 5));
+  // Distance penalty
+  if (distanceScore > 0.4) {
+    const penalty = Math.min(25, Math.round(distanceScore * 25));
     score -= penalty;
-    reasons.push(`Average measurement deviation: ${bestScore.toFixed(1)} inches`);
+    reasons.push(`Average measurement deviation: ${(bestScore ?? 0).toFixed(1)} inches`);
   }
 
   if (usedEstimated) {
@@ -145,7 +157,7 @@ function computeConfidence(
   score = Math.max(0, Math.min(100, score));
   if (reasons.length === 0) reasons.push("High confidence — full measurement match");
 
-  return { score, reasons, matchMethod };
+  return { score, reasons, matchMethod, measurementCoverage, distanceScore };
 }
 
 // Extended findClosestSize returning debug trace
@@ -808,23 +820,52 @@ Deno.serve(async (req) => {
       usedEstimated,
     );
 
-    // ── XXS prevention on low confidence ────────────────────────
-    const isLowConfidence = confidence.score < 50;
-    const isXXSDefault = recommendedSize.toUpperCase() === "XXS" || recommendedSize.toUpperCase() === "XXXS";
-    let needMoreInfo = false;
-
-    if (isLowConfidence && isXXSDefault) {
-      // Don't default to XXS when we're not confident — bump to XS
-      const xsAvailable = availableSizes.map(s => s.toUpperCase()).includes("XS");
-      if (xsAvailable) {
-        recommendedSize = "XS";
-        confidence.reasons.push("Avoided XXS default — low confidence, bumped to XS");
-      }
+    // ── Determine which measurement to ask for by category ──────
+    function getAskForMeasurement(cat: string): string {
+      const lower = cat.toLowerCase();
+      if (["jeans", "denim", "shorts", "skirts"].includes(lower)) return "waist";
+      return "bust"; // tops, dresses, default
     }
 
-    if (isLowConfidence) {
+    // ── Hard guardrails ─────────────────────────────────────────
+    const isExtremeSize = ["XXS", "XXXS", "00"].includes(recommendedSize.toUpperCase());
+    let needMoreInfo = false;
+    let needMoreInfoReason = "";
+    let needMoreInfoAskFor = "";
+
+    // Rule 1: coverage < 2 OR confidence < 65 → NEED_MORE_INFO
+    if (confidence.measurementCoverage < 2 || confidence.score < 65) {
       needMoreInfo = true;
-      console.warn(`[LOW_CONFIDENCE] score=${confidence.score} brand=${target_brand_key} category=${category} reasons=${confidence.reasons.join("; ")}`);
+      needMoreInfoAskFor = getAskForMeasurement(category);
+      needMoreInfoReason = confidence.measurementCoverage < 2
+        ? "Not enough measurement data to make a confident recommendation"
+        : `Confidence too low (${confidence.score}%) for a reliable recommendation`;
+    }
+
+    // Rule 2: extreme size + confidence < 80 → NEED_MORE_INFO
+    if (isExtremeSize && confidence.score < 80 && !needMoreInfo) {
+      needMoreInfo = true;
+      needMoreInfoAskFor = getAskForMeasurement(category);
+      needMoreInfoReason = `Extreme size (${recommendedSize}) with insufficient confidence (${confidence.score}%)`;
+      confidence.reasons.push("Blocked extreme size fallback — confidence below 80%");
+    }
+
+    // ── Log low-confidence events to DB ─────────────────────────
+    if (needMoreInfo || confidence.score < 65) {
+      try {
+        await supabase.from("low_confidence_logs").insert({
+          target_brand: target_brand_key,
+          category,
+          anchor_brand: anchor_brands[0]?.brandKey || "unknown",
+          anchor_size: anchor_brands[0]?.size || "unknown",
+          confidence: confidence.score,
+          coverage: confidence.measurementCoverage,
+          reason: needMoreInfoReason || confidence.reasons.join("; "),
+        });
+      } catch (logErr) {
+        console.error("Failed to log low-confidence event:", logErr);
+      }
+      console.warn(`[LOW_CONFIDENCE] score=${confidence.score} coverage=${confidence.measurementCoverage} brand=${target_brand_key} category=${category}`);
     }
 
     // 5. Scrape product-specific fit info if URL provided
@@ -870,21 +911,34 @@ Deno.serve(async (req) => {
     }
 
     // ── Build response ──────────────────────────────────────────
-    const responseBody: Record<string, unknown> = {
-      size: recommendedSize,
-      brandName: targetDisplayName,
-      sizeScale: targetSizeScale,
-      bullets,
-      comparisons,
-      productFitSummary,
-      recommendation_id: recommendationId,
-      confidence: {
-        score: confidence.score,
-        reasons: confidence.reasons,
-        matchMethod: confidence.matchMethod,
-      },
-      needMoreInfo,
-    };
+    const responseBody: Record<string, unknown> = needMoreInfo
+      ? {
+          status: "NEED_MORE_INFO",
+          ask_for: needMoreInfoAskFor,
+          reason: needMoreInfoReason,
+          brandName: targetDisplayName,
+          confidence: {
+            score: confidence.score,
+            reasons: confidence.reasons,
+            matchMethod: confidence.matchMethod,
+          },
+          needMoreInfo: true,
+        }
+      : {
+          size: recommendedSize,
+          brandName: targetDisplayName,
+          sizeScale: targetSizeScale,
+          bullets,
+          comparisons,
+          productFitSummary,
+          recommendation_id: recommendationId,
+          confidence: {
+            score: confidence.score,
+            reasons: confidence.reasons,
+            matchMethod: confidence.matchMethod,
+          },
+          needMoreInfo: false,
+        };
 
     // Include debug trace only when requested
     if (debug_mode) {
