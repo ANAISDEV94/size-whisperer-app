@@ -225,8 +225,6 @@ const ExtensionPanel = () => {
           return (
             <NeedMoreInfoScreen
               key="need-more-info"
-              confidenceScore={recommendation.confidence?.score ?? 0}
-              confidenceReasons={recommendation.confidence?.reasons ?? []}
               askFor={recommendation.askFor || "bust"}
               reason={recommendation.needMoreInfoReason || ""}
               onSubmitMeasurement={async (key, value) => {

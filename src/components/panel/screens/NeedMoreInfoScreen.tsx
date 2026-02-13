@@ -3,9 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 interface NeedMoreInfoScreenProps {
-  confidenceScore: number;
-  confidenceReasons: string[];
-  askFor: string; // "bust" | "waist"
+  askFor: string;
   reason: string;
   onSubmitMeasurement: (key: string, value: string) => void;
   isLoading?: boolean;
@@ -17,7 +15,7 @@ const MEASUREMENT_LABELS: Record<string, { label: string; placeholder: string }>
   hips: { label: "Hips", placeholder: "e.g. 38" },
 };
 
-const NeedMoreInfoScreen = ({ confidenceScore, confidenceReasons, askFor, reason, onSubmitMeasurement, isLoading }: NeedMoreInfoScreenProps) => {
+const NeedMoreInfoScreen = ({ askFor, reason, onSubmitMeasurement, isLoading }: NeedMoreInfoScreenProps) => {
   const [value, setValue] = useState("");
   const info = MEASUREMENT_LABELS[askFor] || MEASUREMENT_LABELS.bust;
 
@@ -29,15 +27,8 @@ const NeedMoreInfoScreen = ({ confidenceScore, confidenceReasons, askFor, reason
         </div>
         <h2 className="font-serif-display text-xl text-foreground mb-1">Need more info</h2>
         <p className="text-xs text-muted-foreground">
-          {reason || `We couldn't find a confident match (score: ${confidenceScore}%).`}
+          {reason || "We couldn't find a match in this brand's size chart."}
         </p>
-      </div>
-
-      {/* Reasons */}
-      <div className="border-t border-border pt-3 mb-4 space-y-1">
-        {confidenceReasons.map((r, i) => (
-          <p key={i} className="text-[10px] text-muted-foreground">• {r}</p>
-        ))}
       </div>
 
       {/* Single measurement input */}
