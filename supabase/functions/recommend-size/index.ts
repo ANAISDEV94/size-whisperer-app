@@ -20,18 +20,34 @@ function sizeIndex(size: string): number {
 }
 
 // ── Size type classification ────────────────────────────────────
-// Classifies every size label into one of 4 types:
-//   letter        – XXS, XS, S, M, L, XL, 2XL, 3XL, 4XL, etc.
-//   numeric       – 0, 2, 4, 6, 8, 10, 12, 14
-//   numeric_range – 4-6, 8-10, 12-14
-//   denim         – integers 22-40 or W-prefixed (W24, W25)
+// Classifies every size label into one of 5 types:
+//   letter         – XXS, XS, S, M, L, XL, 2XL, 3XL, 4XL, etc.
+//   numeric        – 0, 2, 4, 6, 8, 10, 12, 14
+//   numeric_range  – 4-6, 8-10, 12-14
+//   denim          – integers 22-40 or W-prefixed (W24, W25)
+//   brand_specific – numeric-looking sizes that are NOT US numeric (Zimmermann 0-5, &/Or 1-3)
 const LETTER_REGEX = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|XXXS|2X|3X|4X)$/i;
 const DENIM_WAIST_REGEX = /^W?(\d{2})$/i;
 const NUMERIC_RANGE_REGEX = /^\d+-\d+$/;
 
-type SizeType = "letter" | "numeric" | "numeric_range" | "denim";
+type SizeType = "letter" | "numeric" | "numeric_range" | "denim" | "brand_specific";
 
-function classifySizeType(sizeLabel: string): SizeType {
+// ── Scale Track: high-level grouping for recommendation logic ───
+type ScaleTrack = "letter" | "numeric" | "brand_specific" | "denim";
+
+// Brands whose numeric-looking sizes are NOT standard US numeric.
+// These sizes must NEVER be treated as US numeric or mapped via universal index.
+const BRAND_SPECIFIC_SCALE_BRANDS: Set<string> = new Set([
+  "zimmermann",        // 0-5 (Australian sizing)
+  "and_or_collective", // 1-3
+]);
+
+// Check if a brand uses brand-specific sizing
+function isBrandSpecificScale(brandKey: string): boolean {
+  return BRAND_SPECIFIC_SCALE_BRANDS.has(brandKey.toLowerCase());
+}
+
+function classifySizeType(sizeLabel: string, brandKey?: string): SizeType {
   const trimmed = sizeLabel.trim();
   if (LETTER_REGEX.test(trimmed)) return "letter";
   // Denim waist sizes: 22-40 or W22-W40
@@ -40,6 +56,10 @@ function classifySizeType(sizeLabel: string): SizeType {
     const n = parseInt(denimMatch[1], 10);
     if (n >= 22 && n <= 40) return "denim";
   }
+  // Brand-specific numeric sizes: if brandKey is known brand-specific, tag accordingly
+  if (brandKey && isBrandSpecificScale(brandKey)) {
+    if (/^\d+$/.test(trimmed)) return "brand_specific";
+  }
   // Numeric range like "4-6", "8-10"
   if (NUMERIC_RANGE_REGEX.test(trimmed)) return "numeric_range";
   // Plain numeric (0, 2, 4, 6…)
@@ -47,11 +67,23 @@ function classifySizeType(sizeLabel: string): SizeType {
   return "letter"; // conservative default
 }
 
+// Derive the scale track from a size type
+function sizeTypeToTrack(st: SizeType): ScaleTrack {
+  switch (st) {
+    case "letter": return "letter";
+    case "numeric": return "numeric";
+    case "numeric_range": return "numeric";
+    case "denim": return "denim";
+    case "brand_specific": return "brand_specific";
+  }
+}
+
 // Helper: check if two size types are compatible for comparison
 function sizeTypesCompatible(a: SizeType, b: SizeType): boolean {
   if (a === b) return true;
   // numeric and numeric_range are interchangeable
   if ((a === "numeric" || a === "numeric_range") && (b === "numeric" || b === "numeric_range")) return true;
+  // brand_specific is NEVER compatible with standard numeric
   return false;
 }
 
@@ -62,6 +94,7 @@ function sizeTypeToDbScale(st: SizeType): string[] {
     case "numeric": return ["numeric", "other"];
     case "numeric_range": return ["numeric", "other"];
     case "denim": return ["denim", "denim_waist"];
+    case "brand_specific": return ["numeric", "other", "letter"]; // fetch all, filter by track later
   }
 }
 
@@ -954,10 +987,12 @@ Deno.serve(async (req) => {
     const targetSizeScale = targetBrand?.size_scale || "letter";
     const availableSizes: string[] = (targetBrand?.available_sizes as string[]) || [];
 
-    // 1b. Classify anchor size type
+    // 1b. Classify anchor size type and scale track
     const anchorBrandKey0 = anchor_brands[0]?.brandKey;
     const anchorSizeLabel0 = anchor_brands[0]?.size || "";
-    const anchorSizeType = classifySizeType(anchorSizeLabel0);
+    const anchorSizeType = classifySizeType(anchorSizeLabel0, anchorBrandKey0);
+    const anchorScaleTrack = sizeTypeToTrack(anchorSizeType);
+    const anchorIsBrandSpecific = isBrandSpecificScale(anchorBrandKey0);
     const anchorDbScales = sizeTypeToDbScale(anchorSizeType);
 
     // 2. Normalize category
@@ -1011,23 +1046,74 @@ Deno.serve(async (req) => {
       categoryFallbackUsed = true;
     }
 
-    // Filter target rows: prefer same size_type, classify each row
+    // ── TRACK SPLITTING ─────────────────────────────────────────
+    // Split target rows into separate scale tracks
     const allTargetRows = targetSizingDataRaw;
     const targetRowsBeforeFilter = allTargetRows.length;
+    const targetIsBrandSpecific = isBrandSpecificScale(target_brand_key);
 
-    // First try: rows whose size_label classifies as compatible with anchor size_type
-    let targetSizingData = allTargetRows.filter(
-      (r) => sizeTypesCompatible(classifySizeType(r.size_label), anchorSizeType)
-    );
-    let targetSizeTypeSearched: string = anchorSizeType;
+    // Classify each target row and group by track
+    const targetTrackGroups: Record<ScaleTrack, typeof allTargetRows> = {
+      letter: [],
+      numeric: [],
+      brand_specific: [],
+      denim: [],
+    };
+    for (const row of allTargetRows) {
+      const st = classifySizeType(row.size_label, target_brand_key);
+      const track = sizeTypeToTrack(st);
+      targetTrackGroups[track].push(row);
+    }
+
+    // Determine which tracks are available
+    const targetTracksAvailable: ScaleTrack[] = (Object.keys(targetTrackGroups) as ScaleTrack[])
+      .filter(t => targetTrackGroups[t].length > 0);
+
+    // Select the preferred track for scoring
+    let trackUsed: ScaleTrack = anchorScaleTrack;
+    let trackSelectionReason = "";
     let conversionFallbackUsed = false;
 
-    // If no same-type rows exist but other rows do, use them with conversion fallback
+    if (anchorIsBrandSpecific) {
+      // Brand-specific anchor → ONLY use measurement matching, never universal index
+      // Prefer matching the target's track that has the most measurement data
+      if (targetTrackGroups.letter.length > 0 && targetTrackGroups.numeric.length > 0) {
+        // Both exist — we'll score both and pick the best (handled below)
+        trackUsed = "letter"; // start with letter, will try both
+        trackSelectionReason = "Anchor is brand-specific; will score both letter and numeric tracks";
+      } else if (targetTrackGroups.letter.length > 0) {
+        trackUsed = "letter";
+        trackSelectionReason = "Anchor is brand-specific; target only has letter track";
+      } else if (targetTrackGroups.numeric.length > 0) {
+        trackUsed = "numeric";
+        trackSelectionReason = "Anchor is brand-specific; target only has numeric track";
+      } else if (targetTrackGroups.brand_specific.length > 0) {
+        trackUsed = "brand_specific";
+        trackSelectionReason = "Both anchor and target are brand-specific";
+      } else {
+        trackUsed = anchorScaleTrack;
+        trackSelectionReason = "No matching tracks found; using anchor track as fallback";
+      }
+    } else if (targetTrackGroups[anchorScaleTrack]?.length > 0) {
+      trackUsed = anchorScaleTrack;
+      trackSelectionReason = `Anchor track "${anchorScaleTrack}" matches available target track`;
+    } else if (targetTracksAvailable.length > 0) {
+      // Prefer letter > numeric > denim > brand_specific when anchor track unavailable
+      const preferred: ScaleTrack[] = ["letter", "numeric", "denim", "brand_specific"];
+      trackUsed = preferred.find(t => targetTrackGroups[t].length > 0) || targetTracksAvailable[0];
+      conversionFallbackUsed = true;
+      trackSelectionReason = `Anchor track "${anchorScaleTrack}" not in target; fell back to "${trackUsed}"`;
+    }
+
+    // Get target rows for the chosen track
+    let targetSizingData = targetTrackGroups[trackUsed] || [];
+    let targetSizeTypeSearched: string = trackUsed;
+
+    // If no rows in preferred track, use all rows with conversion fallback
     if (targetSizingData.length === 0 && allTargetRows.length > 0) {
       targetSizingData = allTargetRows;
       conversionFallbackUsed = true;
-      const firstRowType = classifySizeType(allTargetRows[0].size_label);
-      targetSizeTypeSearched = firstRowType;
+      trackSelectionReason += "; using all rows as final fallback";
     }
 
     const targetRowsAfterFilter = targetSizingData.length;
@@ -1053,9 +1139,13 @@ Deno.serve(async (req) => {
       anchorSizingDataAll = anchorDataAll || [];
     }
 
-    // Filter anchor rows to same size type only (strict — never mix for anchor)
+    // Filter anchor rows: for brand-specific brands, accept all their rows;
+    // otherwise filter to same size type only
     const anchorSizingData = anchorSizingDataAll.filter(
-      (r) => sizeTypesCompatible(classifySizeType(r.size_label), anchorSizeType)
+      (r) => {
+        const rowType = classifySizeType(r.size_label, r.brand_key || anchorBrandKey0);
+        return sizeTypesCompatible(rowType, anchorSizeType);
+      }
     );
 
     // 4. Determine recommended size
@@ -1097,7 +1187,8 @@ Deno.serve(async (req) => {
     } else {
       // ── CROSS-BRAND LOGIC ───────────────────────────────────────
 
-      // No early guard needed — conversionFallbackUsed handles missing same-type rows
+      // GUARD: brand-specific anchors must NEVER use universal index mapping
+      const blockUniversalIndex = anchorIsBrandSpecific || targetIsBrandSpecific;
 
       // If weight/height provided, estimate body measurements and use them
       let estimatedMeasurements: Record<string, MeasurementValue> | null = null;
@@ -1141,39 +1232,96 @@ Deno.serve(async (req) => {
         anchorMeasurementsUsed = anchorMeasurements;
 
         if (anchorMeasurements) {
-          closestResult = findClosestSize(
-            anchorMeasurements,
-            targetSizingData as SizingRow[],
-            fit_preference || "true_to_size",
-            category
-          );
+          // ── MULTI-TRACK SCORING for brand-specific anchors ──────
+          // When anchor is brand-specific and target has both letter+numeric,
+          // score BOTH tracks and pick the result with lower avgDeviation.
+          if (anchorIsBrandSpecific && targetTrackGroups.letter.length > 0 && targetTrackGroups.numeric.length > 0) {
+            const resultLetter = findClosestSize(
+              anchorMeasurements,
+              targetTrackGroups.letter as SizingRow[],
+              fit_preference || "true_to_size",
+              category
+            );
+            const resultNumeric = findClosestSize(
+              anchorMeasurements,
+              targetTrackGroups.numeric as SizingRow[],
+              fit_preference || "true_to_size",
+              category
+            );
+
+            // Pick best: lower avgScore, then higher matchedKeys
+            if (resultLetter && resultNumeric) {
+              if (resultNumeric.bestScore < resultLetter.bestScore ||
+                  (resultNumeric.bestScore === resultLetter.bestScore && resultNumeric.matchedKeys > resultLetter.matchedKeys)) {
+                closestResult = resultNumeric;
+                trackUsed = "numeric";
+                trackSelectionReason = "Brand-specific anchor: numeric track scored better";
+              } else {
+                closestResult = resultLetter;
+                trackUsed = "letter";
+                trackSelectionReason = "Brand-specific anchor: letter track scored better";
+              }
+            } else {
+              closestResult = resultLetter || resultNumeric;
+              trackUsed = resultLetter ? "letter" : "numeric";
+              trackSelectionReason = `Brand-specific anchor: only ${trackUsed} track produced results`;
+            }
+          } else {
+            // Standard single-track scoring
+            closestResult = findClosestSize(
+              anchorMeasurements,
+              targetSizingData as SizingRow[],
+              fit_preference || "true_to_size",
+              category
+            );
+          }
+
           if (closestResult) {
-            // Only convert scale when anchor and target scales differ
             if (isSameScale) {
               recommendedSize = closestResult.size;
             } else {
               recommendedSize = convertToScale(closestResult.size, targetSizeScale);
             }
             fitNotes = closestResult.fitNotes;
-          } else {
+          } else if (!blockUniversalIndex) {
             usedFallback = true;
             recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
+          } else {
+            // Brand-specific: can't use universal index, trigger NEED_MORE_INFO
+            usedFallback = true;
+            needMoreInfoEarly = true;
+            recommendedSize = "";
           }
-        } else {
+        } else if (!blockUniversalIndex) {
           usedFallback = true;
           recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
+        } else {
+          usedFallback = true;
+          needMoreInfoEarly = true;
+          recommendedSize = "";
         }
-      } else {
+      } else if (!blockUniversalIndex) {
         usedFallback = true;
         recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
+      } else {
+        usedFallback = true;
+        needMoreInfoEarly = true;
+        recommendedSize = "";
       }
 
-      // Final snap — prefer sizes of same type
-      const sameTypeAvailable = availableSizes.filter(s => sizeTypesCompatible(classifySizeType(s), anchorSizeType));
-      if (sameTypeAvailable.length) {
-        recommendedSize = snapToAvailableSize(recommendedSize, sameTypeAvailable, fit_preference || "true_to_size", target_brand_key);
-      } else if (availableSizes.length) {
-        recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
+      // Final snap — prefer sizes within the CHOSEN TRACK only
+      if (recommendedSize) {
+        const trackSizeFilter = (s: string) => {
+          const st = classifySizeType(s, target_brand_key);
+          const t = sizeTypeToTrack(st);
+          return t === trackUsed || (trackUsed === "numeric" && t === "numeric");
+        };
+        const sameTrackAvailable = availableSizes.filter(trackSizeFilter);
+        if (sameTrackAvailable.length) {
+          recommendedSize = snapToAvailableSize(recommendedSize, sameTrackAvailable, fit_preference || "true_to_size", target_brand_key);
+        } else if (availableSizes.length) {
+          recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
+        }
       }
     }
 
@@ -1204,13 +1352,16 @@ Deno.serve(async (req) => {
     }
 
     // ── Hard guardrails ─────────────────────────────────────────
-    const isExtremeSize = ["XXS", "XXXS", "00"].includes(recommendedSize.toUpperCase());
-    let needMoreInfo = false;
-    let needMoreInfoReason = "";
-    let needMoreInfoAskFor = "";
+    const isExtremeSize = recommendedSize ? ["XXS", "XXXS", "00"].includes(recommendedSize.toUpperCase()) : false;
+    let needMoreInfo = needMoreInfoEarly;
+    let needMoreInfoReason = needMoreInfoEarly ? "Brand-specific scale — cannot use universal index mapping without measurements" : "";
+    let needMoreInfoAskFor = needMoreInfoEarly ? getAskForMeasurement(category) : "";
+
+    const matchedKeys = closestResult?.matchedKeys ?? 0;
+    const avgDeviation = closestResult?.bestScore ?? Infinity;
 
     // Rule 1: confidence < 70 → NEED_MORE_INFO (covers matchedKeys < 2 and high deviation)
-    if (confidence.score < 70) {
+    if (!needMoreInfo && confidence.score < 70) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
       needMoreInfoReason = matchedKeys < 2
@@ -1407,6 +1558,10 @@ Deno.serve(async (req) => {
         targetFitTendency,
         anchorSizeSystem: anchorSizeType,
         anchorSizeType,
+        anchorScaleTrack: anchorScaleTrack,
+        targetTracksAvailable: targetTracksAvailable,
+        trackUsed: trackUsed,
+        trackSelectionReason: trackSelectionReason,
         anchorRowChosen: anchorRowChosen
           ? { sizeLabel: anchorRowChosen.size_label, measurements: anchorRowChosen.measurements }
           : null,
