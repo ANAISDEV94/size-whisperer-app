@@ -227,6 +227,18 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
         ))}
       </Section>
 
+      {/* Row quality filtering */}
+      {debug.targetRowsConsidered !== undefined && (
+        <Section title="Row quality">
+          <Val>
+            {debug.targetRowsConsidered} rows considered (threshold: ≥{debug.rowQualityThreshold ?? 2} dims)
+            {debug.targetRowsExcludedByQuality !== undefined && debug.targetRowsExcludedByQuality > 0 && (
+              <span className="text-yellow-400 ml-1">({debug.targetRowsExcludedByQuality} excluded)</span>
+            )}
+          </Val>
+        </Section>
+      )}
+
       {/* Available sizes */}
       <Section title="Available sizes">
         <Val>{debug.availableSizes.join(", ") || "none"}</Val>

@@ -96,6 +96,9 @@ export interface DebugTrace {
   top3Candidates: { size: string; score: number; matched: number; totalOverlap?: number; deviations?: DimensionDeviation[] }[];
   allSizeScores: { size: string; score: number; matched: number; totalOverlap?: number; deviations?: DimensionDeviation[] }[];
   comparisonLogic: string[];
+  rowQualityThreshold?: number;
+  targetRowsExcludedByQuality?: number;
+  targetRowsConsidered?: number;
 }
 
 export interface BrandComparison {

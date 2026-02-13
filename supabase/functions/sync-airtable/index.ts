@@ -355,8 +355,10 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Check if any usable measurements exist
+        // Compute row_quality = count of valid parsed measurement dimensions
         const usableCount = Object.values(measurements).filter((v) => v !== null).length;
+        const rowQuality = usableCount;
+
         if (usableCount === 0) {
           noMeasurements++;
           warnings.push(`Record ${record.id} (${brandName} ${sizeLabel}): no usable measurements`);
@@ -373,6 +375,7 @@ Deno.serve(async (req) => {
               measurements,
               raw_measurements: rawMeasurements,
               fit_notes: fitNotes,
+              row_quality: rowQuality,
               airtable_record_id: record.id,
               synced_at: new Date().toISOString(),
             },
