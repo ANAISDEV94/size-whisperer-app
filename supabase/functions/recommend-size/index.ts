@@ -213,27 +213,25 @@ interface SizingRow {
 
 // ── Category normalization ───────────────────────────────────────
 const CATEGORY_ALIAS_MAP: Record<string, string> = {
-  tops: "tops",
-  top: "tops",
-  bottoms: "bottoms",
-  bottom: "bottoms",
-  pants: "bottoms",
-  denim: "denim",
-  jeans: "denim",
-  dresses: "dresses",
-  dress: "dresses",
-  swim: "swim",
-  swimwear: "swim",
-  "one-piece swimsuits": "swim",
-  "one_piece_swimsuits": "swim",
-  "sports bras": "sports_bras",
-  "sports_bras": "sports_bras",
-  bras: "sports_bras",
-  outerwear: "outerwear",
-  jackets: "outerwear",
-  shorts: "bottoms",
-  skirts: "bottoms",
+  tops: "tops", top: "tops", t_shirts: "tops", sweatshirts: "tops", crops: "tops",
+  bottoms: "bottoms", bottom: "bottoms", pants: "bottoms", shorts: "bottoms", skirts: "bottoms",
+  trousers_long: "bottoms", trousers_regular: "bottoms", trousers_short: "bottoms",
+  "trousers (long)": "bottoms", "trousers (regular)": "bottoms", "trousers (short)": "bottoms",
+  leggings: "bottoms", leggings_regular: "bottoms", leggings_short: "bottoms",
+  "leggings (regular)": "bottoms", "leggings (short)": "bottoms",
+  denim: "denim", jeans: "denim",
+  dresses: "dresses", dress: "dresses",
+  swim: "swim", swimwear: "swim", "one-piece swimsuits": "swim", one_piece_swimsuits: "swim",
+  bikinis: "swim", bikini_tops: "swim", bikini_bottoms: "swim",
+  "bikini tops": "swim", "bikini bottoms": "swim",
+  "sports bras": "sports_bras", sports_bras: "sports_bras", bras: "sports_bras",
+  outerwear: "outerwear", jackets: "outerwear",
   bodysuits: "bodysuits",
+  jumpsuits: "jumpsuits", playsuits: "jumpsuits",
+  loungewear: "loungewear",
+  shapewear: "shapewear",
+  underwear: "underwear",
+  shoes: "shoes",
 };
 
 function normalizeCategory(raw: string): string {
@@ -938,14 +936,19 @@ Deno.serve(async (req) => {
     categoryVariants.add(rawLower);
     // Add common DB variants
     const REVERSE_CATEGORY_MAP: Record<string, string[]> = {
-      tops: ["tops"],
-      bottoms: ["bottoms", "pants", "shorts", "skirts"],
+      tops: ["tops", "t_shirts", "sweatshirts", "crops"],
+      bottoms: ["bottoms", "pants", "shorts", "skirts", "leggings", "leggings_regular", "leggings_short", "trousers_long", "trousers_regular", "trousers_short"],
       denim: ["denim", "jeans"],
-      dresses: ["dresses", "dress", "dresses "],
-      swim: ["swim", "swimwear", "one-piece swimsuits"],
+      dresses: ["dresses", "dresses "],
+      swim: ["swim", "swimwear", "one-piece swimsuits", "one_piece_swimsuits", "bikinis", "bikini_tops", "bikini_bottoms"],
       sports_bras: ["sports bras", "sports_bras", "bras"],
       outerwear: ["outerwear", "jackets"],
       bodysuits: ["bodysuits"],
+      jumpsuits: ["jumpsuits", "playsuits"],
+      loungewear: ["loungewear"],
+      shapewear: ["shapewear"],
+      underwear: ["underwear"],
+      shoes: ["shoes"],
     };
     if (REVERSE_CATEGORY_MAP[category]) {
       for (const v of REVERSE_CATEGORY_MAP[category]) categoryVariants.add(v);

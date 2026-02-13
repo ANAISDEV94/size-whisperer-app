@@ -68,14 +68,25 @@ function toBrandKey(name: string): string {
 
 // ── Category normalization ───────────────────────────────────────
 const CATEGORY_ALIAS_MAP: Record<string, string> = {
-  tops: "tops", top: "tops",
+  tops: "tops", top: "tops", t_shirts: "tops", sweatshirts: "tops", crops: "tops",
   bottoms: "bottoms", bottom: "bottoms", pants: "bottoms", shorts: "bottoms", skirts: "bottoms",
+  trousers_long: "bottoms", trousers_regular: "bottoms", trousers_short: "bottoms",
+  "trousers (long)": "bottoms", "trousers (regular)": "bottoms", "trousers (short)": "bottoms",
+  leggings: "bottoms", leggings_regular: "bottoms", leggings_short: "bottoms",
+  "leggings (regular)": "bottoms", "leggings (short)": "bottoms",
   denim: "denim", jeans: "denim",
   dresses: "dresses", dress: "dresses",
-  swim: "swim", swimwear: "swim", "one-piece swimsuits": "swim", "one_piece_swimsuits": "swim",
-  "sports bras": "sports_bras", "sports_bras": "sports_bras", bras: "sports_bras",
+  swim: "swim", swimwear: "swim", "one-piece swimsuits": "swim", one_piece_swimsuits: "swim",
+  bikinis: "swim", bikini_tops: "swim", bikini_bottoms: "swim",
+  "bikini tops": "swim", "bikini bottoms": "swim",
+  "sports bras": "sports_bras", sports_bras: "sports_bras", bras: "sports_bras",
   outerwear: "outerwear", jackets: "outerwear",
   bodysuits: "bodysuits",
+  jumpsuits: "jumpsuits", playsuits: "jumpsuits",
+  loungewear: "loungewear",
+  shapewear: "shapewear",
+  underwear: "underwear",
+  shoes: "shoes",
 };
 
 function normalizeCategorySync(raw: string): string {
