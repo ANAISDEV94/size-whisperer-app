@@ -73,6 +73,10 @@ export interface DebugTrace {
   targetFitTendency: string | null;
   anchorSizeSystem?: string;
   anchorSizeType?: string;
+  anchorScaleTrack?: string;
+  targetTracksAvailable?: string[];
+  trackUsed?: string;
+  trackSelectionReason?: string;
   anchorRowChosen?: { sizeLabel: string; measurements: Record<string, unknown> | null } | null;
   targetSizeTypeSearched?: string;
   conversionFallbackUsed?: boolean;

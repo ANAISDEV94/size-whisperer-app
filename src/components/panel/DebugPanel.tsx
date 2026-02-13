@@ -52,12 +52,26 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
         {debug.anchorSizeType && (
           <div className="text-muted-foreground mt-0.5">Size type: <span className="text-foreground">{debug.anchorSizeType}</span></div>
         )}
+        {debug.anchorScaleTrack && (
+          <div className="text-muted-foreground mt-0.5">Scale track: <span className="text-foreground">{debug.anchorScaleTrack}</span></div>
+        )}
         {debug.anchorRowChosen && (
           <div className="text-muted-foreground mt-0.5">
             Row chosen: <span className="text-foreground">{debug.anchorRowChosen.sizeLabel}</span>
           </div>
         )}
       </Section>
+
+      {/* Scale track info */}
+      {debug.targetTracksAvailable && (
+        <Section title="Scale tracks">
+          <div className="text-muted-foreground">Available: <span className="text-foreground">{debug.targetTracksAvailable.join(", ")}</span></div>
+          <div className="text-muted-foreground mt-0.5">Used: <span className="text-foreground">{debug.trackUsed || "—"}</span></div>
+          {debug.trackSelectionReason && (
+            <div className="text-muted-foreground mt-0.5 text-[9px]">{debug.trackSelectionReason}</div>
+          )}
+        </Section>
+      )}
 
       {/* Anchor measurements with min/max */}
       <Section title="Anchor measurements (min / max / midpoint)">
