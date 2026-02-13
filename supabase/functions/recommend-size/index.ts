@@ -19,22 +19,50 @@ function sizeIndex(size: string): number {
   return -1;
 }
 
-// Infer size system from the size label itself
+// ── Size type classification ────────────────────────────────────
+// Classifies every size label into one of 4 types:
+//   letter        – XXS, XS, S, M, L, XL, 2XL, 3XL, 4XL, etc.
+//   numeric       – 0, 2, 4, 6, 8, 10, 12, 14
+//   numeric_range – 4-6, 8-10, 12-14
+//   denim         – integers 22-40 or W-prefixed (W24, W25)
 const LETTER_REGEX = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|XXXS|2X|3X|4X)$/i;
-const DENIM_WAIST_REGEX = /^W?(\d{2})$/i; // matches "W24", "W25", "24", "25" etc.
+const DENIM_WAIST_REGEX = /^W?(\d{2})$/i;
+const NUMERIC_RANGE_REGEX = /^\d+-\d+$/;
 
-function inferSizeSystem(sizeLabel: string): string {
+type SizeType = "letter" | "numeric" | "numeric_range" | "denim";
+
+function classifySizeType(sizeLabel: string): SizeType {
   const trimmed = sizeLabel.trim();
   if (LETTER_REGEX.test(trimmed)) return "letter";
-  // Denim waist sizes: W22-W36 or plain 22-36
+  // Denim waist sizes: 22-40 or W22-W40
   const denimMatch = trimmed.match(DENIM_WAIST_REGEX);
   if (denimMatch) {
     const n = parseInt(denimMatch[1], 10);
-    if (n >= 22 && n <= 36) return "denim_waist";
+    if (n >= 22 && n <= 40) return "denim";
   }
-  // Numeric US sizes (0, 2, 4, 6, 8, 10, etc.) or ranges like "8-10"
-  if (/^\d+(-\d+)?$/.test(trimmed)) return "numeric";
-  return "unknown";
+  // Numeric range like "4-6", "8-10"
+  if (NUMERIC_RANGE_REGEX.test(trimmed)) return "numeric_range";
+  // Plain numeric (0, 2, 4, 6…)
+  if (/^\d+$/.test(trimmed)) return "numeric";
+  return "letter"; // conservative default
+}
+
+// Helper: check if two size types are compatible for comparison
+function sizeTypesCompatible(a: SizeType, b: SizeType): boolean {
+  if (a === b) return true;
+  // numeric and numeric_range are interchangeable
+  if ((a === "numeric" || a === "numeric_range") && (b === "numeric" || b === "numeric_range")) return true;
+  return false;
+}
+
+// Map size_type to size_scale values used in the DB
+function sizeTypeToDbScale(st: SizeType): string[] {
+  switch (st) {
+    case "letter": return ["letter"];
+    case "numeric": return ["numeric", "other"];
+    case "numeric_range": return ["numeric", "other"];
+    case "denim": return ["denim", "denim_waist"];
+  }
 }
 
 function sizeUp(size: string): string | null {
@@ -737,10 +765,11 @@ Deno.serve(async (req) => {
     const targetSizeScale = targetBrand?.size_scale || "letter";
     const availableSizes: string[] = (targetBrand?.available_sizes as string[]) || [];
 
-    // 1b. Determine anchor size system from the label itself
+    // 1b. Classify anchor size type
     const anchorBrandKey0 = anchor_brands[0]?.brandKey;
     const anchorSizeLabel0 = anchor_brands[0]?.size || "";
-    const anchorSizeSystem = inferSizeSystem(anchorSizeLabel0);
+    const anchorSizeType = classifySizeType(anchorSizeLabel0);
+    const anchorDbScales = sizeTypeToDbScale(anchorSizeType);
 
     // 2. Normalize category
     const detectedCategoryRaw = target_category || "tops";
@@ -751,16 +780,30 @@ Deno.serve(async (req) => {
       .eq("brand_key", target_brand_key)
       .eq("category", category);
 
-    // Filter target rows to only matching size system — NEVER compare across systems
-    const sizeSystemForFilter = anchorSizeSystem === "denim_waist" ? "denim" : anchorSizeSystem;
-    const targetSizingData = (targetSizingDataRaw || []).filter(
-      (r: { size_scale?: string }) => r.size_scale === sizeSystemForFilter
+    // Filter target rows: prefer same size_type, classify each row
+    const allTargetRows = targetSizingDataRaw || [];
+    const targetRowsBeforeFilter = allTargetRows.length;
+
+    // First try: rows whose size_label classifies as compatible with anchor size_type
+    let targetSizingData = allTargetRows.filter(
+      (r: { size_label: string }) => sizeTypesCompatible(classifySizeType(r.size_label), anchorSizeType)
     );
-    const targetRowsBeforeFilter = targetSizingDataRaw?.length || 0;
+    let targetSizeTypeSearched: string = anchorSizeType;
+    let conversionFallbackUsed = false;
+
+    // If no same-type rows exist but other rows do, use them with conversion fallback
+    if (targetSizingData.length === 0 && allTargetRows.length > 0) {
+      targetSizingData = allTargetRows;
+      conversionFallbackUsed = true;
+      // Determine what type we're actually searching
+      const firstRowType = classifySizeType(allTargetRows[0].size_label);
+      targetSizeTypeSearched = firstRowType;
+    }
+
     const targetRowsAfterFilter = targetSizingData.length;
     const targetRowsFilteredOut = targetRowsBeforeFilter - targetRowsAfterFilter;
 
-    // 3. Fetch anchor brand sizing data — filtered to anchor's size scale
+    // 3. Fetch anchor brand sizing data — filtered to compatible size type
     const anchorBrandKeys = anchor_brands.map((a: { brandKey: string }) => a.brandKey);
     const { data: anchorSizingDataRaw } = await supabase
       .from("sizing_charts")
@@ -768,9 +811,9 @@ Deno.serve(async (req) => {
       .in("brand_key", anchorBrandKeys)
       .eq("category", category);
 
-    // Filter anchor rows to matching size system
+    // Filter anchor rows to same size type only (strict — never mix for anchor)
     const anchorSizingData = (anchorSizingDataRaw || []).filter(
-      (r: { size_scale?: string }) => r.size_scale === sizeSystemForFilter
+      (r: { size_label: string }) => sizeTypesCompatible(classifySizeType(r.size_label), anchorSizeType)
     );
 
     // 4. Determine recommended size
@@ -780,7 +823,7 @@ Deno.serve(async (req) => {
     let usedEstimated = false;
     let closestResult: ClosestSizeResult | null = null;
     const isSameBrand = anchorBrandKey0 === target_brand_key;
-    const isSameScale = sizeSystemForFilter === targetSizeScale;
+    const isSameScale = !conversionFallbackUsed;
 
     let needMoreInfoEarly = false;
 
@@ -812,11 +855,7 @@ Deno.serve(async (req) => {
     } else {
       // ── CROSS-BRAND LOGIC ───────────────────────────────────────
 
-      // Guard: if size system filter removed all target rows, return NEED_MORE_INFO
-      // DO NOT auto-convert to another system
-      if (targetRowsAfterFilter === 0 && targetRowsBeforeFilter > 0) {
-        needMoreInfoEarly = true;
-      }
+      // No early guard needed — conversionFallbackUsed handles missing same-type rows
 
       // If weight/height provided, estimate body measurements and use them
       let estimatedMeasurements: Record<string, MeasurementValue> | null = null;
@@ -829,7 +868,7 @@ Deno.serve(async (req) => {
         if (estimatedMeasurements) usedEstimated = true;
       }
 
-      if (!needMoreInfoEarly && targetSizingData?.length && (anchorSizingData?.length || estimatedMeasurements)) {
+      if (targetSizingData?.length && (anchorSizingData?.length || estimatedMeasurements)) {
         let anchorMeasurements: Record<string, MeasurementValue | null> | null = null;
 
         if (anchorSizingData?.length) {
@@ -876,26 +915,22 @@ Deno.serve(async (req) => {
             fitNotes = closestResult.fitNotes;
           } else {
             usedFallback = true;
-            recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, sizeSystemForFilter);
+            recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
           }
         } else {
           usedFallback = true;
-          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, sizeSystemForFilter);
+          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
         }
       } else {
         usedFallback = true;
-        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, sizeSystemForFilter);
+        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
       }
 
-      // Final snap — only within same size system
-      const sameSystemAvailable = availableSizes.filter(s => {
-        const sys = inferSizeSystem(s);
-        return sys === anchorSizeSystem || (anchorSizeSystem === "denim_waist" && sys === "numeric");
-      });
-      if (sameSystemAvailable.length) {
-        recommendedSize = snapToAvailableSize(recommendedSize, sameSystemAvailable, fit_preference || "true_to_size", target_brand_key);
+      // Final snap — prefer sizes of same type
+      const sameTypeAvailable = availableSizes.filter(s => sizeTypesCompatible(classifySizeType(s), anchorSizeType));
+      if (sameTypeAvailable.length) {
+        recommendedSize = snapToAvailableSize(recommendedSize, sameTypeAvailable, fit_preference || "true_to_size", target_brand_key);
       } else if (availableSizes.length) {
-        // Fallback: snap to all available if no same-system sizes exist
         recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
       }
     }
@@ -904,6 +939,12 @@ Deno.serve(async (req) => {
     const matchedKeys = closestResult?.matchedKeys ?? 0;
     const avgDeviation = closestResult?.bestScore ?? Infinity;
     const confidence = computeConfidence(matchedKeys, avgDeviation, usedFallback);
+
+    // Penalize confidence when conversion fallback was used (cross-system)
+    if (conversionFallbackUsed && confidence.score > 0) {
+      confidence.score = Math.min(confidence.score, 70);
+      confidence.reasons.push("Confidence capped — size system conversion used (anchor: " + anchorSizeType + ", target rows: " + targetSizeTypeSearched + ")");
+    }
 
     // ── Determine which measurement to ask for by category ──────
     function getAskForMeasurement(cat: string): string {
@@ -920,15 +961,8 @@ Deno.serve(async (req) => {
     let needMoreInfoReason = "";
     let needMoreInfoAskFor = "";
 
-    // Rule 0: size system filter eliminated all target rows — DO NOT auto-convert
-    if (needMoreInfoEarly) {
-      needMoreInfo = true;
-      needMoreInfoAskFor = getAskForMeasurement(category);
-      needMoreInfoReason = `No sizing data available in ${anchorSizeSystem} size system for this brand`;
-    }
-
     // Rule 1: confidence < 70 → NEED_MORE_INFO (covers matchedKeys < 2 and high deviation)
-    if (!needMoreInfo && confidence.score < 70) {
+    if (confidence.score < 70) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
       needMoreInfoReason = matchedKeys < 2
@@ -1093,6 +1127,13 @@ Deno.serve(async (req) => {
       const allScores = closestResult?.allScores || [];
       const top3Candidates = allScores.slice(0, 3);
 
+      // Find the anchor row that was actually used for debug display
+      const anchorRowChosen = anchorSizingData?.find(
+        (r: { brand_key: string; size_label: string }) =>
+          r.brand_key === anchor_brands[0]?.brandKey &&
+          r.size_label.toUpperCase() === anchorSizeLabel0.toUpperCase()
+      );
+
       responseBody.debug = {
         detectedCategoryRaw,
         normalizedCategory: category,
@@ -1111,12 +1152,18 @@ Deno.serve(async (req) => {
         availableSizes,
         fitPreference: fit_preference || "true_to_size",
         targetFitTendency,
-        anchorSizeSystem,
-        sizeSystemFilterUsed: sizeSystemForFilter,
+        anchorSizeSystem: anchorSizeType,
+        anchorSizeType,
+        anchorRowChosen: anchorRowChosen
+          ? { sizeLabel: anchorRowChosen.size_label, measurements: anchorRowChosen.measurements }
+          : null,
+        targetSizeTypeSearched,
+        conversionFallbackUsed,
+        sizeSystemFilterUsed: anchorSizeType,
         targetRowsBeforeSystemFilter: targetRowsBeforeFilter,
         targetRowsAfterSystemFilter: targetRowsAfterFilter,
         targetRowsFilteredOut,
-        isDenimScale: false,
+        isDenimScale: anchorSizeType === "denim",
         usedFallback,
         usedEstimatedMeasurements: usedEstimated,
         targetRowUsed: closestResult?.targetRowUsed

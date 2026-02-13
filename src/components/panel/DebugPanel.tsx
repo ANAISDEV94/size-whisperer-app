@@ -46,6 +46,14 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
       {/* Anchor brand */}
       <Section title="Anchor brand">
         <Val>{debug.anchorBrand} — size {debug.anchorSize}</Val>
+        {debug.anchorSizeType && (
+          <div className="text-muted-foreground mt-0.5">Size type: <span className="text-foreground">{debug.anchorSizeType}</span></div>
+        )}
+        {debug.anchorRowChosen && (
+          <div className="text-muted-foreground mt-0.5">
+            Row chosen: <span className="text-foreground">{debug.anchorRowChosen.sizeLabel}</span>
+          </div>
+        )}
       </Section>
 
       {/* Anchor measurements with min/max */}
@@ -90,6 +98,16 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
         <div className="text-muted-foreground mt-0.5">
           Scale: {debug.targetSizeScale} | Denim: {debug.isDenimScale ? "yes" : "no"} | Fallback: {debug.usedFallback ? "yes" : "no"} | Est. body: {debug.usedEstimatedMeasurements ? "yes" : "no"}
         </div>
+        {debug.targetSizeTypeSearched && (
+          <div className="text-muted-foreground mt-0.5">
+            Target size type searched: <span className="text-foreground">{debug.targetSizeTypeSearched}</span>
+          </div>
+        )}
+        {debug.conversionFallbackUsed && (
+          <div className="text-yellow-400 mt-0.5">
+            ⚠ Conversion fallback used — anchor type ({debug.anchorSizeType}) differs from target rows ({debug.targetSizeTypeSearched})
+          </div>
+        )}
         {debug.anchorSizeSystem && (
           <div className="text-muted-foreground mt-0.5">
             Anchor size system: <span className="text-foreground">{debug.anchorSizeSystem}</span>
@@ -100,12 +118,12 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
         )}
         {debug.targetRowsFilteredOut !== undefined && debug.targetRowsFilteredOut > 0 && (
           <div className="text-yellow-400 mt-0.5">
-            ⚠ {debug.targetRowsFilteredOut} row(s) filtered out due to size system mismatch
+            ⚠ {debug.targetRowsFilteredOut} row(s) filtered out due to size type mismatch
           </div>
         )}
         {debug.targetRowsAfterSystemFilter !== undefined && (
           <div className="text-muted-foreground mt-0.5">
-            Candidate rows after system filter: {debug.targetRowsAfterSystemFilter}
+            Candidate rows after filter: {debug.targetRowsAfterSystemFilter}
           </div>
         )}
       </Section>
