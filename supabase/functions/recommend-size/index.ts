@@ -318,8 +318,29 @@ function snapToAvailableSize(size: string, availableSizes: string[], fitPreferen
   return bestSize;
 }
 
-function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetScale: string, availableSizes: string[], anchorBrandKey?: string, targetBrandKey?: string): string {
+function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetScale: string, availableSizes: string[], anchorBrandKey?: string, targetBrandKey?: string, anchorScale?: string): string {
   const anchorIdx = getUniversalIndex(anchorSize, anchorBrandKey);
+  const scalesMatch = anchorScale && anchorScale === targetScale;
+
+  // When scales are identical, skip universal index mapping entirely —
+  // just apply fit preference shift and snap to available sizes.
+  if (scalesMatch) {
+    let resultSize = anchorSize.toUpperCase().trim();
+    if (fitPreference === "fitted") {
+      const down = sizeDown(resultSize);
+      if (down) resultSize = down;
+    } else if (fitPreference === "relaxed") {
+      const up = sizeUp(resultSize);
+      if (up) resultSize = up;
+    }
+    if (availableSizes.length) {
+      const upperAvail = availableSizes.map(s => s.toUpperCase());
+      if (!upperAvail.includes(resultSize)) {
+        resultSize = snapToAvailableSize(resultSize, availableSizes, fitPreference, targetBrandKey);
+      }
+    }
+    return resultSize;
+  }
   
   if (availableSizes.length && anchorIdx !== -1) {
     let adjustedIdx = anchorIdx;
@@ -706,6 +727,20 @@ Deno.serve(async (req) => {
     const targetSizeScale = targetBrand?.size_scale || "letter";
     const availableSizes: string[] = (targetBrand?.available_sizes as string[]) || [];
 
+    // 1b. Fetch anchor brand's size_scale for same-scale guards
+    const anchorBrandKey0 = anchor_brands[0]?.brandKey;
+    let anchorSizeScale = "letter";
+    if (anchorBrandKey0 && anchorBrandKey0 !== target_brand_key) {
+      const { data: anchorBrandInfo } = await supabase
+        .from("brand_catalog")
+        .select("size_scale")
+        .eq("brand_key", anchorBrandKey0)
+        .single();
+      anchorSizeScale = anchorBrandInfo?.size_scale || "letter";
+    } else if (anchorBrandKey0 === target_brand_key) {
+      anchorSizeScale = targetSizeScale;
+    }
+
     // 2. Fetch sizing charts for target brand
     const category = target_category || "tops";
     const { data: targetSizingData } = await supabase
@@ -728,87 +763,120 @@ Deno.serve(async (req) => {
     let usedFallback = false;
     let usedEstimated = false;
     let closestResult: ClosestSizeResult | null = null;
+    const isSameBrand = anchorBrandKey0 === target_brand_key;
+    const isSameScale = anchorSizeScale === targetSizeScale;
 
     // Debug trace collectors
     let anchorMeasurementsUsed: Record<string, MeasurementValue | null> | null = null;
 
-    // If weight/height provided, estimate body measurements and use them
-    let estimatedMeasurements: Record<string, MeasurementValue> | null = null;
-    if (weight || height) {
-      estimatedMeasurements = await estimateBodyMeasurements(
-        weight || "",
-        height || "",
-        fit_preference || "true_to_size",
-      );
-      if (estimatedMeasurements) usedEstimated = true;
-    }
-
-    if (targetSizingData?.length && (anchorSizingData?.length || estimatedMeasurements)) {
-      let anchorMeasurements: Record<string, MeasurementValue | null> | null = null;
-
-      if (anchorSizingData?.length) {
-        const anchorBrand = anchor_brands[0];
-        const anchorRow = anchorSizingData.find(
-          (r: { brand_key: any; size_label: any; measurements: any }) =>
-            r.brand_key === anchorBrand.brandKey &&
-            r.size_label.toUpperCase() === anchorBrand.size.toUpperCase()
-        );
-        if (anchorRow?.measurements) {
-          anchorMeasurements = anchorRow.measurements as Record<string, MeasurementValue | null>;
+    // ── SAME-BRAND SHORTCUT ─────────────────────────────────────
+    // When anchor and target are the same brand, return the anchor size
+    // directly. No universal index, no scale conversion. Only apply
+    // fit preference shift if not "true_to_size".
+    if (isSameBrand) {
+      recommendedSize = anchor_brands[0].size;
+      const fp = fit_preference || "true_to_size";
+      if (fp === "fitted") {
+        const down = sizeDown(recommendedSize);
+        if (down) recommendedSize = down;
+      } else if (fp === "relaxed") {
+        const up = sizeUp(recommendedSize);
+        if (up) recommendedSize = up;
+      }
+      // Snap to available sizes (same brand, so no index conversion needed)
+      if (availableSizes.length) {
+        const upper = recommendedSize.toUpperCase().trim();
+        if (!availableSizes.map(s => s.toUpperCase()).includes(upper)) {
+          // Only snap within same-scale sizes, no universal index
+          recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fp, target_brand_key);
         }
       }
+    } else {
+      // ── CROSS-BRAND LOGIC ───────────────────────────────────────
 
-      // Blend estimated measurements with anchor measurements
-      if (estimatedMeasurements) {
-        if (anchorMeasurements) {
-          for (const [k, v] of Object.entries(estimatedMeasurements)) {
-            if (!anchorMeasurements[k]) {
-              anchorMeasurements[k] = v;
+      // If weight/height provided, estimate body measurements and use them
+      let estimatedMeasurements: Record<string, MeasurementValue> | null = null;
+      if (weight || height) {
+        estimatedMeasurements = await estimateBodyMeasurements(
+          weight || "",
+          height || "",
+          fit_preference || "true_to_size",
+        );
+        if (estimatedMeasurements) usedEstimated = true;
+      }
+
+      if (targetSizingData?.length && (anchorSizingData?.length || estimatedMeasurements)) {
+        let anchorMeasurements: Record<string, MeasurementValue | null> | null = null;
+
+        if (anchorSizingData?.length) {
+          const anchorBrand = anchor_brands[0];
+          const anchorRow = anchorSizingData.find(
+            (r: { brand_key: any; size_label: any; measurements: any }) =>
+              r.brand_key === anchorBrand.brandKey &&
+              r.size_label.toUpperCase() === anchorBrand.size.toUpperCase()
+          );
+          if (anchorRow?.measurements) {
+            anchorMeasurements = anchorRow.measurements as Record<string, MeasurementValue | null>;
+          }
+        }
+
+        // Blend estimated measurements with anchor measurements
+        if (estimatedMeasurements) {
+          if (anchorMeasurements) {
+            for (const [k, v] of Object.entries(estimatedMeasurements)) {
+              if (!anchorMeasurements[k]) {
+                anchorMeasurements[k] = v;
+              }
             }
+          } else {
+            anchorMeasurements = estimatedMeasurements;
+          }
+        }
+
+        anchorMeasurementsUsed = anchorMeasurements;
+
+        if (anchorMeasurements) {
+          closestResult = findClosestSize(
+            anchorMeasurements,
+            targetSizingData as SizingRow[],
+            fit_preference || "true_to_size",
+            category
+          );
+          if (closestResult) {
+            // Only convert scale when anchor and target scales differ
+            if (isSameScale) {
+              recommendedSize = closestResult.size;
+            } else {
+              recommendedSize = convertToScale(closestResult.size, targetSizeScale);
+            }
+            fitNotes = closestResult.fitNotes;
+          } else {
+            usedFallback = true;
+            recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeScale);
           }
         } else {
-          anchorMeasurements = estimatedMeasurements;
-        }
-      }
-
-      anchorMeasurementsUsed = anchorMeasurements;
-
-      if (anchorMeasurements) {
-        closestResult = findClosestSize(
-          anchorMeasurements,
-          targetSizingData as SizingRow[],
-          fit_preference || "true_to_size",
-          category
-        );
-        if (closestResult) {
-          recommendedSize = convertToScale(closestResult.size, targetSizeScale);
-          fitNotes = closestResult.fitNotes;
-        } else {
           usedFallback = true;
-          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);
+          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeScale);
         }
       } else {
         usedFallback = true;
-        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);
+        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeScale);
       }
-    } else {
-      usedFallback = true;
-      recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key);
-    }
 
-    // Detect denim scale
-    const isDenimScale = availableSizes.length > 0 && availableSizes.every(s => {
-      const n = parseInt(s, 10);
-      return !isNaN(n) && n >= 22 && n <= 40;
-    });
+      // Detect denim scale
+      const isDenimScale = availableSizes.length > 0 && availableSizes.every(s => {
+        const n = parseInt(s, 10);
+        return !isNaN(n) && n >= 22 && n <= 40;
+      });
 
-    if (isDenimScale && isLetterSize(recommendedSize)) {
-      recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
-    }
+      if (isDenimScale && isLetterSize(recommendedSize)) {
+        recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
+      }
 
-    // Final snap
-    if (availableSizes.length) {
-      recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
+      // Final snap
+      if (availableSizes.length) {
+        recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fit_preference || "true_to_size", target_brand_key);
+      }
     }
 
     // ── Confidence scoring ──────────────────────────────────────
