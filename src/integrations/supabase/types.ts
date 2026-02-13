@@ -214,6 +214,7 @@ export type Database = {
           measurements: Json | null
           raw_measurements: Json | null
           size_label: string
+          size_scale: string
           synced_at: string | null
         }
         Insert: {
@@ -226,6 +227,7 @@ export type Database = {
           measurements?: Json | null
           raw_measurements?: Json | null
           size_label: string
+          size_scale?: string
           synced_at?: string | null
         }
         Update: {
@@ -238,6 +240,7 @@ export type Database = {
           measurements?: Json | null
           raw_measurements?: Json | null
           size_label?: string
+          size_scale?: string
           synced_at?: string | null
         }
         Relationships: [

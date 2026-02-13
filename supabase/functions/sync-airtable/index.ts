@@ -8,7 +8,6 @@ const corsHeaders = {
 
 // ── Brand name → brand_key mapping ──────────────────────────────
 const BRAND_KEY_MAP: Record<string, string> = {
-  // Full display names
   "&/Or Collective": "and_or_collective",
   "7 For All Mankind": "seven_for_all_mankind",
   "Alaïa": "alaia",
@@ -47,7 +46,6 @@ const BRAND_KEY_MAP: Record<string, string> = {
   Versace: "versace",
   "Victoria Beckham": "victoria_beckham",
   Zimmermann: "zimmermann",
-  // Airtable shorthand / alternate names
   ALO: "alo_yoga",
   Alo: "alo_yoga",
   alo: "alo_yoga",
@@ -68,14 +66,37 @@ function toBrandKey(name: string): string {
     .replace(/^_|_$/g, "");
 }
 
-// ── Measurement normalization ───────────────────────────────────
+// ── Size scale detection ────────────────────────────────────────
 
-interface NormalizedValue {
-  value?: number;
-  min?: number;
-  max?: number;
-  options?: (number | { min: number; max: number })[];
-  note?: string;
+const SCALE_ALIASES: Record<string, string> = {
+  letter: "letter",
+  letters: "letter",
+  alpha: "letter",
+  numeric: "numeric",
+  number: "numeric",
+  denim: "denim",
+};
+
+const LETTER_REGEX = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|XXXL|4X)$/i;
+
+function inferSizeScale(sizeLabel: string, explicitScale?: string): string {
+  if (explicitScale) {
+    const normalized = SCALE_ALIASES[explicitScale.toLowerCase().trim()];
+    if (normalized) return normalized;
+  }
+  const trimmed = sizeLabel.trim();
+  if (LETTER_REGEX.test(trimmed)) return "letter";
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return "numeric";
+  if (/^\d{2}$/.test(trimmed) && parseInt(trimmed) >= 22 && parseInt(trimmed) <= 40) return "denim";
+  return "other";
+}
+
+// ── Measurement parsing (numeric min/max/mid) ───────────────────
+
+interface ParsedMeasurement {
+  min: number;
+  max: number;
+  mid: number;
   unit: string;
 }
 
@@ -87,87 +108,92 @@ function detectUnit(raw: string): { cleaned: string; unit: string } {
   return { cleaned: lower.replace(/in(ches)?/gi, "").trim(), unit: "in" };
 }
 
-function parseSegment(
-  s: string
-): number | { min: number; max: number } | { note: string } | null {
-  const trimmed = s.trim();
-  if (!trimmed) return null;
-
-  // Check for range: dash / en-dash / em-dash
-  const rangeParts = trimmed.split(/\s*[-–—]+\s*/);
-  if (rangeParts.length === 2) {
-    const a = parseFloat(rangeParts[0]);
-    const b = parseFloat(rangeParts[1]);
-    if (!isNaN(a) && !isNaN(b)) {
-      return { min: Math.min(a, b), max: Math.max(a, b) };
-    }
-  }
-
-  const num = parseFloat(trimmed);
-  if (!isNaN(num)) return num;
-
-  return { note: trimmed };
-}
-
-function normalizeMeasurement(raw: string): NormalizedValue | null {
+function parseMeasurementField(raw: string): ParsedMeasurement | null {
   if (!raw || !raw.trim()) return null;
 
   const { cleaned, unit } = detectUnit(raw);
   if (!cleaned) return null;
 
-  // Split by slash or backslash first (OR options)
-  const orParts = cleaned.split(/\s*[/\\]\s*/);
-
-  if (orParts.length === 1) {
-    // Single segment — could be a value or range
-    const result = parseSegment(orParts[0]);
-    if (result === null) return null;
-    if (typeof result === "number") return { value: result, unit };
-    if ("note" in result) return { note: result.note, unit };
-    return { min: result.min, max: result.max, unit };
-  }
-
-  // Multiple OR options
-  const options: (number | { min: number; max: number })[] = [];
-  let hasNote = false;
-  let noteText = "";
-
-  for (const part of orParts) {
-    const result = parseSegment(part);
-    if (result === null) continue;
-    if (typeof result === "number") {
-      options.push(result);
-    } else if ("note" in result) {
-      hasNote = true;
-      noteText += (noteText ? ", " : "") + result.note;
-    } else {
-      options.push(result);
+  // Try range: "36 - 38", "29-30.5", "23.5 - 24.5"
+  const rangeParts = cleaned.split(/\s*[-–—]+\s*/);
+  if (rangeParts.length === 2) {
+    const a = parseFloat(rangeParts[0]);
+    const b = parseFloat(rangeParts[1]);
+    if (!isNaN(a) && !isNaN(b)) {
+      const min = Math.min(a, b);
+      const max = Math.max(a, b);
+      return { min, max, mid: (min + max) / 2, unit };
     }
   }
 
-  if (options.length === 0 && hasNote) {
-    return { note: noteText, unit };
+  // Try slash-separated options: "34/36" → treat as range
+  const slashParts = cleaned.split(/\s*[/\\]\s*/);
+  if (slashParts.length >= 2) {
+    const nums = slashParts.map((s) => parseFloat(s)).filter((n) => !isNaN(n));
+    if (nums.length >= 2) {
+      const min = Math.min(...nums);
+      const max = Math.max(...nums);
+      return { min, max, mid: (min + max) / 2, unit };
+    }
   }
-  if (options.length === 1) {
-    const opt = options[0];
-    if (typeof opt === "number") return { value: opt, unit };
-    return { min: opt.min, max: opt.max, unit };
-  }
-  if (options.length > 0) {
-    return { options, unit };
+
+  // Single value
+  const num = parseFloat(cleaned);
+  if (!isNaN(num)) {
+    return { min: num, max: num, mid: num, unit };
   }
 
   return null;
 }
 
-function normalizeRecord(
-  rawMeasurements: Record<string, string>
-): Record<string, NormalizedValue | null> {
-  const normalized: Record<string, NormalizedValue | null> = {};
-  for (const [key, value] of Object.entries(rawMeasurements)) {
-    normalized[key] = normalizeMeasurement(value);
+// ── Airtable field name handling ─────────────────────────────────
+
+const FIELD_NAME_MAP: Record<string, string> = {
+  bust: "bust",
+  chest: "bust",
+  waist: "waist",
+  hips: "hips",
+  hip: "hips",
+  "low hip": "hips",
+  shoulder: "shoulders",
+  shoulders: "shoulders",
+  length: "length",
+  "pants/denim length": "length",
+  inseam: "inseam",
+  rise: "rise",
+  thigh: "thigh",
+  sleeve: "sleeve_length",
+  "sleeve length": "sleeve_length",
+  arm: "sleeve_length",
+  neck: "neck",
+  torso: "torso",
+  underbust: "underbust",
+  "jump size": "jump_size",
+  "us conversion size": "us_conversion_size",
+  "bra size": "bra_size",
+  "bra sizes": "bra_size",
+  "bras size": "bra_size",
+  notes: "_notes",
+};
+
+function normalizeFieldName(rawFieldName: string): { key: string; isMeasurement: boolean } {
+  const cleaned = rawFieldName
+    .replace(/\s*\(.*?\)\s*/g, "")
+    .trim()
+    .toLowerCase();
+
+  const mapped = FIELD_NAME_MAP[cleaned];
+  if (mapped) {
+    return { key: mapped, isMeasurement: !mapped.startsWith("_") };
   }
-  return normalized;
+
+  for (const [pattern, normalizedKey] of Object.entries(FIELD_NAME_MAP)) {
+    if (cleaned.includes(pattern)) {
+      return { key: normalizedKey, isMeasurement: !normalizedKey.startsWith("_") };
+    }
+  }
+
+  return { key: cleaned, isMeasurement: false };
 }
 
 // ── Airtable fetch ──────────────────────────────────────────────
@@ -208,61 +234,6 @@ async function fetchAllRecords(
   return records;
 }
 
-// ── Airtable field name handling ─────────────────────────────────
-// Airtable columns often have units in brackets like "Bust (inches)"
-// or alternate names like "Low Hip (inches)" meaning "hips"
-
-const FIELD_NAME_MAP: Record<string, string> = {
-  bust: "bust",
-  chest: "bust",
-  waist: "waist",
-  hips: "hips",
-  hip: "hips",
-  "low hip": "hips",
-  shoulder: "shoulders",
-  shoulders: "shoulders",
-  length: "length",
-  "pants/denim length": "length",
-  inseam: "inseam",
-  rise: "rise",
-  thigh: "thigh",
-  sleeve: "sleeve_length",
-  "sleeve length": "sleeve_length",
-  arm: "sleeve_length",
-  neck: "neck",
-  torso: "torso",
-  underbust: "underbust",
-  "jump size": "jump_size",
-  "us conversion size": "us_conversion_size",
-  "bra size": "bra_size",
-  "bra sizes": "bra_size",
-  "bras size": "bra_size",
-  notes: "_notes",
-};
-
-function normalizeFieldName(rawFieldName: string): { key: string; isMeasurement: boolean } {
-  // Strip content in brackets like "(inches)", "(in)", "(cm)"
-  const cleaned = rawFieldName
-    .replace(/\s*\(.*?\)\s*/g, "")
-    .trim()
-    .toLowerCase();
-
-  const mapped = FIELD_NAME_MAP[cleaned];
-  if (mapped) {
-    // Fields starting with _ are metadata, not measurements
-    return { key: mapped, isMeasurement: !mapped.startsWith("_") };
-  }
-
-  // Fallback: check if any known field name is contained
-  for (const [pattern, normalizedKey] of Object.entries(FIELD_NAME_MAP)) {
-    if (cleaned.includes(pattern)) {
-      return { key: normalizedKey, isMeasurement: !normalizedKey.startsWith("_") };
-    }
-  }
-
-  return { key: cleaned, isMeasurement: false };
-}
-
 // ── Main handler ────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -271,7 +242,6 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Use service role key for DB operations
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!serviceRoleKey) {
       return new Response(
@@ -294,22 +264,17 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-    // Fetch all records from Airtable
-    const records = await fetchAllRecords(
-      airtableApiKey,
-      airtableBaseId,
-      airtableTableName
-    );
+    const records = await fetchAllRecords(airtableApiKey, airtableBaseId, airtableTableName);
 
     let synced = 0;
+    let noMeasurements = 0;
     const errors: string[] = [];
+    const warnings: string[] = [];
 
     for (const record of records) {
       try {
         const fields = record.fields;
 
-        // Extract brand, category, size from fields
-        // Adjust field names to match your Airtable schema
         const brandName =
           (fields["Brand"] as string) ||
           (fields["brand"] as string) ||
@@ -325,6 +290,10 @@ Deno.serve(async (req) => {
           (fields["size"] as string) ||
           (fields["Size Label"] as string) ||
           "";
+        const explicitScale =
+          (fields["Size Scale"] as string) ||
+          (fields["size_scale"] as string) ||
+          undefined;
 
         if (!brandName || !sizeLabel) {
           errors.push(`Record ${record.id}: missing brand or size`);
@@ -332,11 +301,13 @@ Deno.serve(async (req) => {
         }
 
         const brandKey = toBrandKey(brandName);
+        const sizeScale = inferSizeScale(sizeLabel, explicitScale);
 
-        // Extract measurement fields using field name normalization
+        // Extract measurement fields
         const rawMeasurements: Record<string, string> = {};
+        const measurements: Record<string, ParsedMeasurement | null> = {};
         let fitNotes: string | null = null;
-        const skipFields = ["brand", "category", "size", "garment category", "brand name", "size label"];
+        const skipFields = ["brand", "category", "size", "garment category", "brand name", "size label", "size scale", "size_scale"];
 
         for (const [key, val] of Object.entries(fields)) {
           if (typeof val !== "string") continue;
@@ -349,12 +320,17 @@ Deno.serve(async (req) => {
             fitNotes = val || null;
           } else if (isMeasurement) {
             rawMeasurements[normalizedKey] = val;
+            measurements[normalizedKey] = parseMeasurementField(val);
           }
         }
 
-        const measurements = normalizeRecord(rawMeasurements);
+        // Check if any usable measurements exist
+        const usableCount = Object.values(measurements).filter((v) => v !== null).length;
+        if (usableCount === 0) {
+          noMeasurements++;
+          warnings.push(`Record ${record.id} (${brandName} ${sizeLabel}): no usable measurements`);
+        }
 
-        // Upsert sizing chart
         const { error: upsertError } = await supabase
           .from("sizing_charts")
           .upsert(
@@ -362,6 +338,7 @@ Deno.serve(async (req) => {
               brand_key: brandKey,
               category: category.toLowerCase(),
               size_label: sizeLabel,
+              size_scale: sizeScale,
               measurements,
               raw_measurements: rawMeasurements,
               fit_notes: fitNotes,
@@ -381,13 +358,17 @@ Deno.serve(async (req) => {
       }
     }
 
+    console.log(`Sync complete: ${synced}/${records.length} rows imported, ${noMeasurements} rows with no usable measurements, ${errors.length} errors`);
+
     return new Response(
       JSON.stringify({
         success: true,
         total_fetched: records.length,
         synced,
+        no_measurements_warnings: noMeasurements,
         errors_count: errors.length,
-        errors: errors.slice(0, 20), // Limit error output
+        errors: errors.slice(0, 20),
+        warnings: warnings.slice(0, 20),
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
