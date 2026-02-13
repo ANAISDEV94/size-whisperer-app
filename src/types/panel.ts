@@ -42,9 +42,14 @@ export interface ConfidenceInfo {
 
 export interface DebugTrace {
   detectedCategory: string;
+  detectionSource: string; // "url" | "dom" | "heuristic"
   anchorBrand: string;
   anchorSize: string;
   anchorMeasurements: Record<string, number>;
+  anchorMeasurementsRaw: Record<string, { min: number | null; max: number | null; midpoint: number | null }>;
+  missingDimensions: string[];
+  measurementCoverage: number;
+  keyDimensionsList: string[];
   targetBrandKey: string;
   targetBrandDisplayName: string;
   targetSizeScale: string;
@@ -59,6 +64,7 @@ export interface DebugTrace {
     measurements: Record<string, unknown> | null;
     fit_notes: string | null;
   } | null;
+  top3Candidates: { size: string; score: number; matched: number }[];
   allSizeScores: { size: string; score: number; matched: number }[];
   comparisonLogic: string[];
 }

@@ -942,20 +942,43 @@ Deno.serve(async (req) => {
 
     // Include debug trace only when requested
     if (debug_mode) {
+      const keys = getMeasurementKeys(category);
       const anchorMids: Record<string, number> = {};
-      if (anchorMeasurementsUsed) {
-        const keys = getMeasurementKeys(category);
-        for (const k of keys) {
-          const mid = getMidpoint(anchorMeasurementsUsed[k]);
-          if (mid !== null) anchorMids[k] = mid;
+      const anchorRaw: Record<string, { min: number | null; max: number | null; midpoint: number | null }> = {};
+      const missingDimensions: string[] = [];
+
+      for (const k of keys) {
+        const mv = anchorMeasurementsUsed?.[k] ?? null;
+        const mid = getMidpoint(mv);
+        if (mid !== null) {
+          anchorMids[k] = mid;
+          anchorRaw[k] = {
+            min: mv?.min ?? mv?.value ?? null,
+            max: mv?.max ?? mv?.value ?? null,
+            midpoint: mid,
+          };
+        } else {
+          missingDimensions.push(k);
         }
       }
 
+      // Determine detection source heuristic
+      const detectionSource: string = product_url ? "url" : "heuristic";
+
+      // Top 3 candidate sizes
+      const allScores = closestResult?.allScores || [];
+      const top3Candidates = allScores.slice(0, 3);
+
       responseBody.debug = {
         detectedCategory: category,
+        detectionSource,
         anchorBrand: anchor_brands[0]?.displayName || anchor_brands[0]?.brandKey,
         anchorSize: anchor_brands[0]?.size,
         anchorMeasurements: anchorMids,
+        anchorMeasurementsRaw: anchorRaw,
+        missingDimensions,
+        measurementCoverage: confidence.measurementCoverage,
+        keyDimensionsList: keys,
         targetBrandKey: target_brand_key,
         targetBrandDisplayName: targetDisplayName,
         targetSizeScale,
@@ -972,7 +995,8 @@ Deno.serve(async (req) => {
               fit_notes: closestResult.targetRowUsed.fit_notes,
             }
           : null,
-        allSizeScores: closestResult?.allScores || [],
+        top3Candidates,
+        allSizeScores: allScores,
         comparisonLogic: comparisons.map(c => `${c.brandName} ${c.size} → ${c.fitTag}`),
       };
     }

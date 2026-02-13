@@ -31,27 +31,48 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
         ))}
       </Section>
 
-      {/* Category & anchor */}
+      {/* Category & detection source */}
       <Section title="Detected category">
         <Val>{debug.detectedCategory}</Val>
+        <div className="text-muted-foreground mt-0.5">Source: {debug.detectionSource}</div>
       </Section>
 
+      {/* Anchor brand */}
       <Section title="Anchor brand">
         <Val>{debug.anchorBrand} — size {debug.anchorSize}</Val>
       </Section>
 
-      {/* Anchor measurements */}
-      <Section title="Anchor measurements (midpoints)">
-        {Object.keys(debug.anchorMeasurements).length > 0 ? (
-          Object.entries(debug.anchorMeasurements).map(([k, v]) => (
+      {/* Anchor measurements with min/max */}
+      <Section title="Anchor measurements (min / max / midpoint)">
+        {debug.anchorMeasurementsRaw && Object.keys(debug.anchorMeasurementsRaw).length > 0 ? (
+          Object.entries(debug.anchorMeasurementsRaw).map(([k, v]) => (
             <div key={k} className="flex justify-between">
               <span className="text-muted-foreground">{k}</span>
-              <span className="text-foreground">{v}"</span>
+              <span className="text-foreground">
+                {v.min ?? "—"} / {v.max ?? "—"} / {v.midpoint ?? "—"}"
+              </span>
             </div>
           ))
         ) : (
           <span className="text-muted-foreground italic">No measurements available</span>
         )}
+      </Section>
+
+      {/* Missing dimensions */}
+      {debug.missingDimensions && debug.missingDimensions.length > 0 && (
+        <Section title="Missing dimensions">
+          <Val className="text-red-400">{debug.missingDimensions.join(", ")}</Val>
+        </Section>
+      )}
+
+      {/* Measurement coverage */}
+      <Section title="Measurement coverage">
+        <Val>
+          {debug.measurementCoverage} / {debug.keyDimensionsList?.length ?? "?"} key dimensions
+        </Val>
+        <div className="text-muted-foreground mt-0.5">
+          Keys: {debug.keyDimensionsList?.join(", ") || "none"}
+        </div>
       </Section>
 
       {/* Target brand */}
@@ -65,8 +86,24 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
         </div>
       </Section>
 
+      {/* Top 3 candidate sizes */}
+      {debug.top3Candidates && debug.top3Candidates.length > 0 && (
+        <Section title="Top 3 candidate sizes">
+          {debug.top3Candidates.map((s, i) => (
+            <div key={i} className="flex justify-between">
+              <span className="text-foreground">
+                {i === 0 ? "🏆 " : ""}{s.size}
+              </span>
+              <span className="text-muted-foreground">
+                dist: {s.score.toFixed(2)} ({s.matched} dims)
+              </span>
+            </div>
+          ))}
+        </Section>
+      )}
+
       {/* Target row used */}
-      <Section title="Target size chart row used">
+      <Section title="Chosen target size row">
         {debug.targetRowUsed ? (
           <>
             <Val>Size: {debug.targetRowUsed.size_label}</Val>
@@ -91,7 +128,7 @@ const DebugPanel = ({ debug, confidence }: DebugPanelProps) => {
 
       {/* All size scores */}
       {debug.allSizeScores.length > 0 && (
-        <Section title="Comparison scores (lower = better)">
+        <Section title="All size scores (lower = better)">
           {debug.allSizeScores.map((s, i) => (
             <div key={i} className="flex justify-between">
               <span className="text-foreground">{s.size}</span>
@@ -127,8 +164,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Val({ children }: { children: React.ReactNode }) {
-  return <div className="text-foreground">{children}</div>;
+function Val({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={className || "text-foreground"}>{children}</div>;
 }
 
 export default DebugPanel;
