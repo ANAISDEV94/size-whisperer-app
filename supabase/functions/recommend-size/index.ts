@@ -103,76 +103,48 @@ function getMeasurementKeys(category: string): string[] {
   return CATEGORY_MEASUREMENT_KEYS[lower] || CATEGORY_MEASUREMENT_KEYS.default;
 }
 
-// ── Confidence scoring ──────────────────────────────────────────
+// ── Confidence scoring (deterministic) ──────────────────────────
 
 interface ConfidenceResult {
-  score: number; // 0-100
+  score: number; // 0, 70, 85, or 95
   reasons: string[];
   matchMethod: "measurement" | "fallback_index" | "fallback_legacy";
+  measurementCoverage: number;
+  avgDeviation: number;
 }
 
 function computeConfidence(
-  anchorMeasurements: Record<string, MeasurementValue | null> | null,
-  targetSizingData: SizingRow[] | null,
-  bestScore: number | null,
   matchedKeys: number,
-  totalKeys: number,
+  avgDeviation: number,
   usedFallback: boolean,
-  usedEstimated: boolean,
-): ConfidenceResult & { measurementCoverage: number; distanceScore: number } {
+): ConfidenceResult {
   const reasons: string[] = [];
-  let score = 100;
-  let matchMethod: ConfidenceResult["matchMethod"] = "measurement";
-
-  // ── Coverage: how many key dimensions were matched ────────────
-  const measurementCoverage = matchedKeys;
-
-  // ── Distance score: normalized distance between anchor and target ─
-  // bestScore is avg absolute deviation in inches; normalize to 0-1 range (0=perfect)
-  const distanceScore = bestScore !== null ? Math.min(bestScore / 5, 1) : 1;
+  let matchMethod: ConfidenceResult["matchMethod"] = usedFallback ? "fallback_index" : "measurement";
 
   if (usedFallback) {
-    score -= 40;
-    matchMethod = "fallback_index";
     reasons.push("No sizing chart data — used universal index mapping");
   }
 
-  if (!anchorMeasurements || Object.keys(anchorMeasurements).length === 0) {
-    score -= 30;
-    reasons.push("No anchor measurements available");
+  // Deterministic confidence tiers
+  let score: number;
+  if (matchedKeys < 2) {
+    score = 0;
+    reasons.push(`Only ${matchedKeys} measurement dimension(s) matched — need at least 2`);
+  } else if (avgDeviation <= 0.75) {
+    score = 95;
+    reasons.push(`Excellent match — avg deviation ${avgDeviation.toFixed(2)}″`);
+  } else if (avgDeviation <= 1.5) {
+    score = 85;
+    reasons.push(`Good match — avg deviation ${avgDeviation.toFixed(2)}″`);
+  } else if (avgDeviation <= 2.0) {
+    score = 70;
+    reasons.push(`Marginal match — avg deviation ${avgDeviation.toFixed(2)}″`);
+  } else {
+    score = 0;
+    reasons.push(`Too much deviation (${avgDeviation.toFixed(2)}″) — cannot recommend confidently`);
   }
 
-  if (!targetSizingData || targetSizingData.length === 0) {
-    score -= 25;
-    reasons.push("No target brand sizing chart");
-  }
-
-  // Coverage penalty
-  if (measurementCoverage < 2) {
-    score -= 30;
-    reasons.push(`Only ${measurementCoverage} measurement dimension(s) matched — need at least 2`);
-  } else if (matchedKeys < totalKeys && matchedKeys > 0) {
-    const pct = Math.round((1 - matchedKeys / totalKeys) * 20);
-    score -= pct;
-    reasons.push(`Only ${matchedKeys}/${totalKeys} measurement dimensions matched`);
-  }
-
-  // Distance penalty
-  if (distanceScore > 0.4) {
-    const penalty = Math.min(25, Math.round(distanceScore * 25));
-    score -= penalty;
-    reasons.push(`Average measurement deviation: ${(bestScore ?? 0).toFixed(1)} inches`);
-  }
-
-  if (usedEstimated) {
-    score -= 10;
-    reasons.push("Used AI-estimated body measurements");
-  }
-
-  score = Math.max(0, Math.min(100, score));
-  if (reasons.length === 0) reasons.push("High confidence — full measurement match");
-
-  return { score, reasons, matchMethod, measurementCoverage, distanceScore };
+  return { score, reasons, matchMethod, measurementCoverage: matchedKeys, avgDeviation };
 }
 
 // Extended findClosestSize returning debug trace
@@ -899,21 +871,15 @@ Deno.serve(async (req) => {
     }
 
     // ── Confidence scoring ──────────────────────────────────────
-    const confidence = computeConfidence(
-      anchorMeasurementsUsed,
-      targetSizingData as SizingRow[] | null,
-      closestResult?.bestScore ?? null,
-      closestResult?.matchedKeys ?? 0,
-      closestResult?.totalKeys ?? 0,
-      usedFallback,
-      usedEstimated,
-    );
+    const matchedKeys = closestResult?.matchedKeys ?? 0;
+    const avgDeviation = closestResult?.bestScore ?? Infinity;
+    const confidence = computeConfidence(matchedKeys, avgDeviation, usedFallback);
 
     // ── Determine which measurement to ask for by category ──────
     function getAskForMeasurement(cat: string): string {
       const lower = cat.toLowerCase();
       if (["jeans", "denim", "shorts", "skirts", "bottoms"].includes(lower)) return "waist";
-      if (["swim", "swimwear"].includes(lower)) return "bust";
+      if (["swim", "swimwear", "sports bras"].includes(lower)) return "underbust";
       return "bust"; // tops, dresses, outerwear, default
     }
 
@@ -930,32 +896,33 @@ Deno.serve(async (req) => {
       needMoreInfoReason = `No sizing data available in ${anchorSizeScale} scale for this brand`;
     }
 
-    // Rule 1: coverage < 2 OR confidence < 65 → NEED_MORE_INFO
-    if (confidence.measurementCoverage < 2 || confidence.score < 65) {
+    // Rule 1: confidence < 70 → NEED_MORE_INFO (covers matchedKeys < 2 and high deviation)
+    if (!needMoreInfo && confidence.score < 70) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
-      needMoreInfoReason = confidence.measurementCoverage < 2
+      needMoreInfoReason = matchedKeys < 2
         ? "Not enough measurement data to make a confident recommendation"
-        : `Confidence too low (${confidence.score}%) for a reliable recommendation`;
+        : `Measurement deviation too high (${avgDeviation.toFixed(2)}″) for a reliable recommendation`;
     }
 
-    // Rule 2: extreme size + confidence < 80 → NEED_MORE_INFO
-    if (isExtremeSize && confidence.score < 80 && !needMoreInfo) {
+    // Rule 2: never default to extreme/smallest size
+    if (!needMoreInfo && isExtremeSize && confidence.score < 95) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
-      needMoreInfoReason = `Extreme size (${recommendedSize}) with insufficient confidence (${confidence.score}%)`;
-      confidence.reasons.push("Blocked extreme size fallback — confidence below 80%");
+      needMoreInfoReason = `Extreme size (${recommendedSize}) requires very high confidence`;
+      confidence.reasons.push("Blocked extreme size — confidence below 95%");
     }
 
-    // Rule 3: brand_source=fallback (Revolve couldn't detect brand) + confidence < 75 → NEED_MORE_INFO
-    if (brand_source === "fallback" && confidence.score < 75 && !needMoreInfo) {
+    // Rule 3: brand_source=fallback + confidence < 85 → NEED_MORE_INFO
+    if (!needMoreInfo && brand_source === "fallback" && confidence.score < 85) {
       needMoreInfo = true;
       needMoreInfoAskFor = getAskForMeasurement(category);
       needMoreInfoReason = "Could not confidently identify the brand on this page";
-      confidence.reasons.push("Brand detection fell back — confidence threshold raised to 75%");
+      confidence.reasons.push("Brand detection fell back — confidence threshold raised to 85%");
     }
 
-    if (needMoreInfo || confidence.score < 65) {
+    // Log low-confidence events
+    if (needMoreInfo || confidence.score < 70) {
       try {
         await supabase.from("low_confidence_logs").insert({
           target_brand: target_brand_key,
@@ -969,7 +936,7 @@ Deno.serve(async (req) => {
       } catch (logErr) {
         console.error("Failed to log low-confidence event:", logErr);
       }
-      console.warn(`[LOW_CONFIDENCE] score=${confidence.score} coverage=${confidence.measurementCoverage} brand=${target_brand_key} category=${category}`);
+      console.warn(`[LOW_CONFIDENCE] score=${confidence.score} coverage=${matchedKeys} avgDeviation=${avgDeviation.toFixed(2)} brand=${target_brand_key} category=${category}`);
     }
 
     // 5. Scrape product-specific fit info if URL provided
