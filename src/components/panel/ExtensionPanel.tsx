@@ -21,6 +21,7 @@ function useTargetBrand() {
       brandKey: params.get("brand") || "csb",
       category: params.get("category") || "tops",
       productUrl: params.get("url") || undefined,
+      brandSource: params.get("brand_source") || "domain",
     };
   }, []);
 }
@@ -127,6 +128,9 @@ const ExtensionPanel = () => {
       target.category,
       user?.id,
       target.productUrl,
+      undefined,
+      undefined,
+      target.brandSource,
     );
 
     setPanelState("recommendation");
@@ -142,6 +146,7 @@ const ExtensionPanel = () => {
       target.productUrl,
       weight,
       height,
+      target.brandSource,
     );
   }, [lastProfile, fetchRecommendation, target, user]);
 
@@ -234,6 +239,7 @@ const ExtensionPanel = () => {
                   target.productUrl,
                   undefined,
                   `${value}" ${key}`,
+                  target.brandSource,
                 );
               }}
               isLoading={recLoading}

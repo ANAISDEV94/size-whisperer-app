@@ -10,7 +10,7 @@ interface UseRecommendationReturn {
   debugMode: boolean;
   debugAllowed: boolean;
   setDebugMode: (v: boolean) => void;
-  fetchRecommendation: (profile: UserProfile, targetBrandKey: string, targetCategory: string, userId?: string, productUrl?: string, weight?: string, height?: string) => Promise<void>;
+  fetchRecommendation: (profile: UserProfile, targetBrandKey: string, targetCategory: string, userId?: string, productUrl?: string, weight?: string, height?: string, brandSource?: string) => Promise<void>;
   logAdjustment: (action: "size_down" | "keep" | "size_up", finalSize: string) => Promise<void>;
 }
 
@@ -39,6 +39,7 @@ export function useRecommendation(): UseRecommendationReturn {
     productUrl?: string,
     weight?: string,
     height?: string,
+    brandSource?: string,
   ) => {
     setIsLoading(true);
     setError(null);
@@ -58,6 +59,7 @@ export function useRecommendation(): UseRecommendationReturn {
           product_url: productUrl,
           weight: weight || undefined,
           height: height || undefined,
+          brand_source: brandSource || undefined,
           debug_mode: debugAllowed && debugMode,
         },
       });
