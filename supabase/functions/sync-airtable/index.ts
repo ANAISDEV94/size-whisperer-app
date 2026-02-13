@@ -66,6 +66,24 @@ function toBrandKey(name: string): string {
     .replace(/^_|_$/g, "");
 }
 
+// ── Category normalization ───────────────────────────────────────
+const CATEGORY_ALIAS_MAP: Record<string, string> = {
+  tops: "tops", top: "tops",
+  bottoms: "bottoms", bottom: "bottoms",
+  denim: "denim", jeans: "denim",
+  dresses: "dresses", dress: "dresses",
+  swim: "swim", swimwear: "swim", "one-piece swimsuits": "swim",
+  "sports bras": "sports_bras", "sports_bras": "sports_bras",
+  outerwear: "outerwear",
+  shorts: "bottoms", skirts: "bottoms",
+  bodysuits: "bodysuits",
+};
+
+function normalizeCategorySync(raw: string): string {
+  const lower = raw.toLowerCase().trim();
+  return CATEGORY_ALIAS_MAP[lower] || lower;
+}
+
 // ── Size scale detection ────────────────────────────────────────
 
 const SCALE_ALIASES: Record<string, string> = {
@@ -280,11 +298,12 @@ Deno.serve(async (req) => {
           (fields["brand"] as string) ||
           (fields["Brand Name"] as string) ||
           "";
-        const category =
+        const rawCategory =
           (fields["Category"] as string) ||
           (fields["category"] as string) ||
           (fields["Garment Category"] as string) ||
           "tops";
+        const category = normalizeCategorySync(rawCategory);
         const sizeLabel =
           (fields["Size"] as string) ||
           (fields["size"] as string) ||
@@ -336,7 +355,7 @@ Deno.serve(async (req) => {
           .upsert(
             {
               brand_key: brandKey,
-              category: category.toLowerCase(),
+              category,
               size_label: sizeLabel,
               size_scale: sizeScale,
               measurements,

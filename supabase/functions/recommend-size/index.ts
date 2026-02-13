@@ -80,7 +80,33 @@ interface SizingRow {
   fit_notes: string | null;
 }
 
-// Category-to-measurement priority mapping (aligned with extension enum)
+// ── Category normalization ───────────────────────────────────────
+const CATEGORY_ALIAS_MAP: Record<string, string> = {
+  tops: "tops",
+  top: "tops",
+  bottoms: "bottoms",
+  bottom: "bottoms",
+  denim: "denim",
+  jeans: "denim",
+  dresses: "dresses",
+  dress: "dresses",
+  swim: "swim",
+  swimwear: "swim",
+  "one-piece swimsuits": "swim",
+  "sports bras": "sports_bras",
+  "sports_bras": "sports_bras",
+  outerwear: "outerwear",
+  shorts: "bottoms",
+  skirts: "bottoms",
+  bodysuits: "bodysuits",
+};
+
+function normalizeCategory(raw: string): string {
+  const lower = raw.toLowerCase().trim();
+  return CATEGORY_ALIAS_MAP[lower] || lower;
+}
+
+// Category-to-measurement priority mapping
 const CATEGORY_MEASUREMENT_KEYS: Record<string, string[]> = {
   tops: ["bust", "waist"],
   bottoms: ["waist", "hips"],
@@ -88,19 +114,13 @@ const CATEGORY_MEASUREMENT_KEYS: Record<string, string[]> = {
   dresses: ["bust", "waist", "hips"],
   swim: ["bust", "waist", "hips", "underbust"],
   outerwear: ["bust", "waist", "shoulders"],
-  // Legacy aliases still supported
-  jeans: ["waist", "hips", "rise"],
-  shorts: ["waist", "hips"],
-  skirts: ["waist", "hips"],
-  swimwear: ["bust", "waist", "hips", "underbust"],
-  "sports bras": ["bust", "underbust"],
+  sports_bras: ["bust", "underbust"],
   bodysuits: ["bust", "waist", "hips"],
   default: ["bust", "waist", "hips"],
 };
 
 function getMeasurementKeys(category: string): string[] {
-  const lower = category.toLowerCase();
-  return CATEGORY_MEASUREMENT_KEYS[lower] || CATEGORY_MEASUREMENT_KEYS.default;
+  return CATEGORY_MEASUREMENT_KEYS[category] || CATEGORY_MEASUREMENT_KEYS.default;
 }
 
 // ── Confidence scoring (deterministic) ──────────────────────────
@@ -718,8 +738,9 @@ Deno.serve(async (req) => {
     const anchorSizeLabel0 = anchor_brands[0]?.size || "";
     const anchorSizeScale = inferSizeScaleFromLabel(anchorSizeLabel0);
 
-    // 2. Fetch sizing charts for target brand — filtered to anchor's size scale
-    const category = target_category || "tops";
+    // 2. Normalize category
+    const detectedCategoryRaw = target_category || "tops";
+    const category = normalizeCategory(detectedCategoryRaw);
     const { data: targetSizingDataRaw } = await supabase
       .from("sizing_charts")
       .select("size_label, measurements, fit_notes, size_scale")
@@ -1062,7 +1083,9 @@ Deno.serve(async (req) => {
       const top3Candidates = allScores.slice(0, 3);
 
       responseBody.debug = {
-        detectedCategory: category,
+        detectedCategoryRaw,
+        normalizedCategory: category,
+        airtableCategoryMatchesCount: targetRowsBeforeFilter,
         detectionSource,
         anchorBrand: anchor_brands[0]?.displayName || anchor_brands[0]?.brandKey,
         anchorSize: anchor_brands[0]?.size,
