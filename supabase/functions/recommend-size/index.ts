@@ -301,14 +301,35 @@ function computeConfidence(
   return { score, reasons, matchMethod, measurementCoverage: matchedKeys, avgDeviation };
 }
 
+// ── Interval distance helpers ────────────────────────────────────
+
+/**
+ * Compute distance between two intervals. Returns 0 if they overlap.
+ */
+function intervalDistance(uMin: number, uMax: number, sMin: number, sMax: number): number {
+  if (uMax < sMin) return sMin - uMax;
+  if (sMax < uMin) return uMin - sMax;
+  return 0; // overlap
+}
+
+/**
+ * Compute overlap amount between two intervals. Returns 0 if no overlap.
+ */
+function overlapAmount(uMin: number, uMax: number, sMin: number, sMax: number): number {
+  return Math.max(0, Math.min(uMax, sMax) - Math.max(uMin, sMin));
+}
+
 // ── Per-dimension deviation detail for debug ─────────────────────
 interface DimensionDeviation {
   dimension: string;
+  userMin: number;
+  userMax: number;
   userMidpoint: number;
   targetMin: number;
   targetMax: number;
   deviation: number;
-  insideRange: boolean;
+  overlap: number;
+  insideRange: boolean; // true if intervals overlap
 }
 
 // Extended findClosestSize returning debug trace
@@ -321,7 +342,7 @@ interface ClosestSizeResult {
   anchorMids: Record<string, number>;
   anchorRanges: Record<string, NormalizedRange>;
   targetRowUsed: SizingRow | null;
-  allScores: { size: string; score: number; matched: number; deviations: DimensionDeviation[] }[];
+  allScores: { size: string; score: number; matched: number; totalOverlap: number; deviations: DimensionDeviation[] }[];
 }
 
 function findClosestSize(
@@ -345,86 +366,101 @@ function findClosestSize(
     }
   }
 
-  // Also pick up any extra measurement keys present in both anchor and target
+  // Also pick up any extra measurement keys present in anchor
   const allMeasurementKeys = new Set<string>(keys);
   for (const k of Object.keys(anchorNorm)) {
     allMeasurementKeys.add(k);
   }
 
-  // Build user midpoints from anchor
-  const userMidpoints: Record<string, number> = {};
+  // Build user intervals from anchor
+  const userIntervals: Record<string, NormalizedRange> = {};
   for (const k of allMeasurementKeys) {
     if (anchorNorm[k]) {
-      userMidpoints[k] = anchorNorm[k].midpoint;
+      userIntervals[k] = anchorNorm[k];
       if (!anchorRanges[k]) anchorRanges[k] = anchorNorm[k];
     }
   }
 
-  if (Object.keys(userMidpoints).length === 0) return null;
+  if (Object.keys(userIntervals).length === 0) return null;
 
-  let bestSize = targetSizes[0];
-  let bestScore = Infinity;
-  const allScores: { size: string; score: number; matched: number; deviations: DimensionDeviation[] }[] = [];
+  // Key dimensions set for overlap bonus
+  const keyDimsSet = new Set(keys);
+
+  const allScores: { size: string; score: number; matched: number; totalOverlap: number; deviations: DimensionDeviation[] }[] = [];
 
   for (const row of targetSizes) {
     if (!row.measurements) continue;
     const targetNorm = normalizeMeasurements(row.measurements as Record<string, unknown>);
-    let totalDeviation = 0;
+    let totalScore = 0;
     let matched = 0;
+    let totalOverlap = 0;
     const deviations: DimensionDeviation[] = [];
 
-    for (const [k, userMid] of Object.entries(userMidpoints)) {
+    for (const [k, userRange] of Object.entries(userIntervals)) {
       const target = targetNorm[k];
       if (!target) continue;
 
-      let deviation: number;
-      let insideRange: boolean;
+      const dist = intervalDistance(userRange.min, userRange.max, target.min, target.max);
+      const olap = overlapAmount(userRange.min, userRange.max, target.min, target.max);
 
-      if (userMid >= target.min && userMid <= target.max) {
-        // Case A: user midpoint inside target range → perfect fit
-        deviation = 0;
-        insideRange = true;
-      } else {
-        // Case B: distance to nearest boundary
-        deviation = userMid < target.min ? target.min - userMid : userMid - target.max;
-        insideRange = false;
+      totalScore += dist;
+      matched++;
+      if (olap > 0 && keyDimsSet.has(k)) {
+        totalOverlap += olap;
       }
 
-      totalDeviation += deviation;
-      matched++;
-      deviations.push({ dimension: k, userMidpoint: userMid, targetMin: target.min, targetMax: target.max, deviation, insideRange });
+      deviations.push({
+        dimension: k,
+        userMin: userRange.min,
+        userMax: userRange.max,
+        userMidpoint: userRange.midpoint,
+        targetMin: target.min,
+        targetMax: target.max,
+        deviation: dist,
+        overlap: olap,
+        insideRange: dist === 0,
+      });
     }
 
     if (matched > 0) {
-      const avgDev = totalDeviation / matched;
-      allScores.push({ size: row.size_label, score: avgDev, matched, deviations });
-      if (avgDev < bestScore || (avgDev === bestScore && matched > (allScores.find(s => s.size === bestSize.size_label)?.matched || 0))) {
-        bestScore = avgDev;
-        bestSize = row;
-      }
+      const avgScore = totalScore / matched;
+      allScores.push({ size: row.size_label, score: avgScore, matched, totalOverlap, deviations });
     }
   }
 
-  // Apply fit preference offset
-  let resultSize = bestSize.size_label;
+  if (allScores.length === 0) return null;
+
+  // Sort: lowest avgScore → highest matchedDims → highest totalOverlap
+  allScores.sort((a, b) => {
+    if (a.score !== b.score) return a.score - b.score;
+    if (a.matched !== b.matched) return b.matched - a.matched;
+    return b.totalOverlap - a.totalOverlap;
+  });
+
+  const bestEntry = allScores[0];
+  const bestRow = targetSizes.find(r => r.size_label === bestEntry.size) || targetSizes[0];
+
+  // Apply fit preference AFTER selecting base size, within same scale track
+  let resultSize = bestRow.size_label;
+  const baseType = classifySizeType(resultSize);
   if (fitPreference === "fitted") {
     const down = sizeDown(resultSize);
-    if (down) resultSize = down;
+    if (down && sizeTypesCompatible(classifySizeType(down), baseType)) resultSize = down;
   } else if (fitPreference === "relaxed") {
     const up = sizeUp(resultSize);
-    if (up) resultSize = up;
+    if (up && sizeTypesCompatible(classifySizeType(up), baseType)) resultSize = up;
   }
 
   return {
     size: resultSize,
-    fitNotes: bestSize.fit_notes,
-    bestScore,
-    matchedKeys: allScores.find(s => s.size === bestSize.size_label)?.matched || 0,
-    totalKeys: Object.keys(userMidpoints).length,
+    fitNotes: bestRow.fit_notes,
+    bestScore: bestEntry.score,
+    matchedKeys: bestEntry.matched,
+    totalKeys: Object.keys(userIntervals).length,
     anchorMids,
     anchorRanges,
-    targetRowUsed: bestSize,
-    allScores: allScores.sort((a, b) => a.score - b.score),
+    targetRowUsed: bestRow,
+    allScores,
   };
 }
 
@@ -1399,6 +1435,7 @@ Deno.serve(async (req) => {
           size: s.size,
           score: s.score,
           matched: s.matched,
+          totalOverlap: s.totalOverlap,
           deviations: s.deviations,
         })),
         comparisonLogic: comparisons.map(c => `${c.brandName} ${c.size} → ${c.fitTag}`),
