@@ -14,7 +14,6 @@ interface UseRecommendationReturn {
   logAdjustment: (action: "size_down" | "keep" | "size_up", finalSize: string) => Promise<void>;
 }
 
-// Debug mode is enabled via URL ?debug=1 or non-production env
 function isDebugAllowed(): boolean {
   if (typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
@@ -73,10 +72,11 @@ export function useRecommendation(): UseRecommendationReturn {
         sizeScale: data.sizeScale || "letter",
         bullets: data.bullets || [],
         comparisons: data.comparisons || [],
-        confidence: data.confidence || undefined,
         needMoreInfo: data.needMoreInfo || false,
         askFor: data.ask_for || undefined,
         needMoreInfoReason: data.reason || undefined,
+        betweenSizes: data.betweenSizes || null,
+        matchExplanation: data.matchExplanation || undefined,
         debug: data.debug || undefined,
       });
       setRecommendationId(data.recommendation_id || null);

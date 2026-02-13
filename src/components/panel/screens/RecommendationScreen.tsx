@@ -27,9 +27,6 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, on
     }
   };
 
-  const hasConfidence = !!recommendation.confidence;
-  const confidenceScore = recommendation.confidence?.score ?? 100;
-
   return (
     <div className="flex flex-col flex-1 px-5 py-6 overflow-y-auto">
       <div className="text-center mb-6">
@@ -42,22 +39,11 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, on
         <p className="text-xs text-muted-foreground mt-1">
           for {recommendation.brandName}
         </p>
-        {/* Confidence badge */}
-        {hasConfidence && (
-          <div className="mt-2 flex items-center justify-center gap-1.5">
-            <span
-              className={`inline-block w-2 h-2 rounded-full ${
-                confidenceScore >= 70
-                  ? "bg-green-500"
-                  : confidenceScore >= 50
-                    ? "bg-yellow-500"
-                    : "bg-red-500"
-              }`}
-            />
-            <span className="text-[10px] text-muted-foreground">
-              {confidenceScore}% confidence
-            </span>
-          </div>
+        {/* Between-sizes indicator */}
+        {recommendation.betweenSizes && (
+          <p className="text-[10px] text-primary mt-2">
+            You're between {recommendation.betweenSizes[0]} and {recommendation.betweenSizes[1]}
+          </p>
         )}
       </div>
 
@@ -149,7 +135,7 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, on
       </Collapsible>
 
       {/* Debug mode panel */}
-      {debugMode && recommendation.debug && recommendation.confidence && (
+      {debugMode && recommendation.debug && (
         <Collapsible open={debugOpen} onOpenChange={setDebugOpen} className="mt-4">
           <CollapsibleTrigger className="flex items-center justify-between w-full py-2 text-left">
             <span className="text-xs text-primary flex items-center gap-1.5">
@@ -163,7 +149,7 @@ const RecommendationScreen = ({ recommendation, onSizeDown, onKeep, onSizeUp, on
             )}
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <DebugPanel debug={recommendation.debug} confidence={recommendation.confidence} />
+            <DebugPanel debug={recommendation.debug} />
           </CollapsibleContent>
         </Collapsible>
       )}

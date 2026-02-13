@@ -27,84 +27,49 @@ export interface SizeRecommendation {
   sizeScale: "numeric" | "letter";
   bullets: string[];
   comparisons: BrandComparison[];
-  confidence?: ConfidenceInfo;
   needMoreInfo?: boolean;
   askFor?: string;
   needMoreInfoReason?: string;
+  betweenSizes?: [string, string] | null;
+  matchExplanation?: string;
   debug?: DebugTrace;
-}
-
-export interface ConfidenceInfo {
-  score: number;
-  reasons: string[];
-  matchMethod: "measurement" | "fallback_index" | "fallback_legacy";
-}
-
-export interface DimensionDeviation {
-  dimension: string;
-  userMin: number;
-  userMax: number;
-  userMidpoint: number;
-  targetMin: number;
-  targetMax: number;
-  deviation: number;
-  overlap: number;
-  insideRange: boolean;
 }
 
 export interface DebugTrace {
   detectedCategoryRaw?: string;
   normalizedCategory?: string;
-  airtableCategoryMatchesCount?: number;
-  detectedCategory?: string; // legacy compat
-  detectionSource: string;
+  categoryFallbackUsed?: boolean;
   anchorBrand: string;
   anchorSize: string;
-  anchorMeasurements: Record<string, number>;
-  anchorMeasurementsRaw: Record<string, { min: number | null; max: number | null; midpoint: number | null }>;
-  missingDimensions: string[];
-  measurementCoverage: number;
-  keyDimensionsList: string[];
+  anchorSizeType?: string;
+  anchorScaleTrack?: string;
   targetBrandKey: string;
   targetBrandDisplayName: string;
   targetSizeScale: string;
   availableSizes: string[];
   fitPreference: string;
   targetFitTendency: string | null;
-  anchorSizeSystem?: string;
-  anchorSizeType?: string;
-  anchorScaleTrack?: string;
-  targetTracksAvailable?: string[];
   trackUsed?: string;
-  trackSelectionReason?: string;
-  anchorRowChosen?: { sizeLabel: string; measurements: Record<string, unknown> | null } | null;
-  targetSizeTypeSearched?: string;
+  targetTracksAvailable?: string[];
   conversionFallbackUsed?: boolean;
-  categoryFallbackUsed?: boolean;
-  sizeSystemFilterUsed?: string;
-  targetRowsBeforeSystemFilter?: number;
-  targetRowsAfterSystemFilter?: number;
-  targetRowsFilteredOut?: number;
-  isDenimScale: boolean;
+  keyDimensionsList: string[];
   usedFallback: boolean;
   usedEstimatedMeasurements: boolean;
+  matchExplanation?: string;
+  betweenSizes?: [string, string] | null;
   targetRowUsed: {
     size_label: string;
     measurements: Record<string, unknown> | null;
     fit_notes: string | null;
   } | null;
-  top3Candidates: { size: string; score: number; matched: number; totalOverlap?: number; deviations?: DimensionDeviation[] }[];
-  allSizeScores: { size: string; score: number; matched: number; totalOverlap?: number; deviations?: DimensionDeviation[] }[];
-  comparisonLogic: string[];
-  rowQualityThreshold?: number;
-  targetRowsExcludedByQuality?: number;
+  sizeDetails?: Record<string, { dimension: string; userMid: number; rangeMin: number; rangeMax: number; contained: boolean }[]>;
   targetRowsConsidered?: number;
 }
 
 export interface BrandComparison {
   brandName: string;
   size: string;
-  fitTag: string; // e.g., "true to size", "runs small", "snug fit"
+  fitTag: string;
 }
 
 export const SUPPORTED_BRANDS = [

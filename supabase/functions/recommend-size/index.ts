@@ -6,97 +6,9 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// ── Size ordering for comparison ────────────────────────────────
+// ── Size ordering ───────────────────────────────────────────────
 const NUMERIC_ORDER = ["00", "0", "2", "4", "6", "8", "10", "12", "14", "16", "18", "20"];
 const LETTER_ORDER = ["XXXS", "XXS", "XS", "S", "M", "L", "XL", "2X", "3X", "4X"];
-
-function sizeIndex(size: string): number {
-  const upper = size.toUpperCase().trim();
-  const ni = NUMERIC_ORDER.indexOf(upper);
-  if (ni !== -1) return ni;
-  const li = LETTER_ORDER.indexOf(upper);
-  if (li !== -1) return li + 100; // offset to separate from numeric
-  return -1;
-}
-
-// ── Size type classification ────────────────────────────────────
-// Classifies every size label into one of 5 types:
-//   letter         – XXS, XS, S, M, L, XL, 2XL, 3XL, 4XL, etc.
-//   numeric        – 0, 2, 4, 6, 8, 10, 12, 14
-//   numeric_range  – 4-6, 8-10, 12-14
-//   denim          – integers 22-40 or W-prefixed (W24, W25)
-//   brand_specific – numeric-looking sizes that are NOT US numeric (Zimmermann 0-5, &/Or 1-3)
-const LETTER_REGEX = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|XXXS|2X|3X|4X)$/i;
-const DENIM_WAIST_REGEX = /^W?(\d{2})$/i;
-const NUMERIC_RANGE_REGEX = /^\d+-\d+$/;
-
-type SizeType = "letter" | "numeric" | "numeric_range" | "denim" | "brand_specific";
-
-// ── Scale Track: high-level grouping for recommendation logic ───
-type ScaleTrack = "letter" | "numeric" | "brand_specific" | "denim";
-
-// Brands whose numeric-looking sizes are NOT standard US numeric.
-// These sizes must NEVER be treated as US numeric or mapped via universal index.
-const BRAND_SPECIFIC_SCALE_BRANDS: Set<string> = new Set([
-  "zimmermann",        // 0-5 (Australian sizing)
-  "and_or_collective", // 1-3
-]);
-
-// Check if a brand uses brand-specific sizing
-function isBrandSpecificScale(brandKey: string): boolean {
-  return BRAND_SPECIFIC_SCALE_BRANDS.has(brandKey.toLowerCase());
-}
-
-function classifySizeType(sizeLabel: string, brandKey?: string): SizeType {
-  const trimmed = sizeLabel.trim();
-  if (LETTER_REGEX.test(trimmed)) return "letter";
-  // Denim waist sizes: 22-40 or W22-W40
-  const denimMatch = trimmed.match(DENIM_WAIST_REGEX);
-  if (denimMatch) {
-    const n = parseInt(denimMatch[1], 10);
-    if (n >= 22 && n <= 40) return "denim";
-  }
-  // Brand-specific numeric sizes: if brandKey is known brand-specific, tag accordingly
-  if (brandKey && isBrandSpecificScale(brandKey)) {
-    if (/^\d+$/.test(trimmed)) return "brand_specific";
-  }
-  // Numeric range like "4-6", "8-10"
-  if (NUMERIC_RANGE_REGEX.test(trimmed)) return "numeric_range";
-  // Plain numeric (0, 2, 4, 6…)
-  if (/^\d+$/.test(trimmed)) return "numeric";
-  return "letter"; // conservative default
-}
-
-// Derive the scale track from a size type
-function sizeTypeToTrack(st: SizeType): ScaleTrack {
-  switch (st) {
-    case "letter": return "letter";
-    case "numeric": return "numeric";
-    case "numeric_range": return "numeric";
-    case "denim": return "denim";
-    case "brand_specific": return "brand_specific";
-  }
-}
-
-// Helper: check if two size types are compatible for comparison
-function sizeTypesCompatible(a: SizeType, b: SizeType): boolean {
-  if (a === b) return true;
-  // numeric and numeric_range are interchangeable
-  if ((a === "numeric" || a === "numeric_range") && (b === "numeric" || b === "numeric_range")) return true;
-  // brand_specific is NEVER compatible with standard numeric
-  return false;
-}
-
-// Map size_type to size_scale values used in the DB
-function sizeTypeToDbScale(st: SizeType): string[] {
-  switch (st) {
-    case "letter": return ["letter"];
-    case "numeric": return ["numeric", "other"];
-    case "numeric_range": return ["numeric", "other"];
-    case "denim": return ["denim", "denim_waist"];
-    case "brand_specific": return ["numeric", "other", "letter"]; // fetch all, filter by track later
-  }
-}
 
 function sizeUp(size: string): string | null {
   const upper = size.toUpperCase().trim();
@@ -116,15 +28,49 @@ function sizeDown(size: string): string | null {
   return null;
 }
 
-// ── Deterministic size mapping ──────────────────────────────────
+// ── Size type classification ────────────────────────────────────
+type SizeType = "letter" | "numeric" | "numeric_range" | "denim" | "brand_specific";
+type ScaleTrack = "letter" | "numeric" | "brand_specific" | "denim";
 
-interface MeasurementValue {
-  value?: number;
-  min?: number;
-  max?: number;
-  mid?: number;
-  options?: (number | { min: number; max: number })[];
-  unit?: string;
+const LETTER_REGEX = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|4XL|XXXS|2X|3X|4X)$/i;
+const DENIM_WAIST_REGEX = /^W?(\d{2})$/i;
+const NUMERIC_RANGE_REGEX = /^\d+-\d+$/;
+
+const BRAND_SPECIFIC_SCALE_BRANDS = new Set(["zimmermann", "and_or_collective"]);
+
+function isBrandSpecificScale(brandKey: string): boolean {
+  return BRAND_SPECIFIC_SCALE_BRANDS.has(brandKey.toLowerCase());
+}
+
+function classifySizeType(sizeLabel: string, brandKey?: string): SizeType {
+  const trimmed = sizeLabel.trim();
+  if (LETTER_REGEX.test(trimmed)) return "letter";
+  const denimMatch = trimmed.match(DENIM_WAIST_REGEX);
+  if (denimMatch) {
+    const n = parseInt(denimMatch[1], 10);
+    if (n >= 22 && n <= 40) return "denim";
+  }
+  if (brandKey && isBrandSpecificScale(brandKey)) {
+    if (/^\d+$/.test(trimmed)) return "brand_specific";
+  }
+  if (NUMERIC_RANGE_REGEX.test(trimmed)) return "numeric_range";
+  if (/^\d+$/.test(trimmed)) return "numeric";
+  return "letter";
+}
+
+function sizeTypeToTrack(st: SizeType): ScaleTrack {
+  switch (st) {
+    case "letter": return "letter";
+    case "numeric": case "numeric_range": return "numeric";
+    case "denim": return "denim";
+    case "brand_specific": return "brand_specific";
+  }
+}
+
+function sizeTypesCompatible(a: SizeType, b: SizeType): boolean {
+  if (a === b) return true;
+  if ((a === "numeric" || a === "numeric_range") && (b === "numeric" || b === "numeric_range")) return true;
+  return false;
 }
 
 // ── Normalized measurement range ────────────────────────────────
@@ -134,36 +80,22 @@ interface NormalizedRange {
   midpoint: number;
 }
 
-/**
- * Parse any measurement cell into a normalized {min, max, midpoint}.
- * Handles: single number, range "34-36", slash "34/35", object with min/max,
- * object with value, string with units/spaces/quotes.
- */
 function normalizeToRange(raw: unknown): NormalizedRange | null {
   if (raw === null || raw === undefined) return null;
 
-  // Already structured object
   if (typeof raw === "object" && raw !== null) {
     const obj = raw as Record<string, unknown>;
-
-    // Has mid/midpoint from sync-airtable
     if (obj.mid !== undefined && typeof obj.mid === "number") {
       const min = typeof obj.min === "number" ? obj.min : obj.mid;
       const max = typeof obj.max === "number" ? obj.max : obj.mid;
       return { min, max, midpoint: obj.mid };
     }
-
-    // Has min/max
     if (typeof obj.min === "number" && typeof obj.max === "number") {
       return { min: obj.min, max: obj.max, midpoint: (obj.min + obj.max) / 2 };
     }
-
-    // Has value
     if (typeof obj.value === "number") {
       return { min: obj.value, max: obj.value, midpoint: obj.value };
     }
-
-    // Has options array
     if (Array.isArray(obj.options) && obj.options.length > 0) {
       const nums = (obj.options as Array<number | { min: number; max: number }>).map((o) =>
         typeof o === "number" ? o : (o.min + o.max) / 2
@@ -171,38 +103,28 @@ function normalizeToRange(raw: unknown): NormalizedRange | null {
       const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
       return { min: Math.min(...nums), max: Math.max(...nums), midpoint: avg };
     }
-
     return null;
   }
 
-  // Numeric
   if (typeof raw === "number") {
     return { min: raw, max: raw, midpoint: raw };
   }
 
-  // String parsing
   if (typeof raw === "string") {
-    // Strip spaces, quotes, unit suffixes like "in", "cm", """
     const cleaned = raw.replace(/[""']/g, "").replace(/\s*(in|cm|inches|")\s*/gi, "").trim();
     if (!cleaned) return null;
-
-    // Range: "34-36" or "34 - 36"
     const dashMatch = cleaned.match(/^([\d.]+)\s*[-–]\s*([\d.]+)$/);
     if (dashMatch) {
       const a = parseFloat(dashMatch[1]);
       const b = parseFloat(dashMatch[2]);
       if (!isNaN(a) && !isNaN(b)) return { min: Math.min(a, b), max: Math.max(a, b), midpoint: (a + b) / 2 };
     }
-
-    // Slash: "34/35"
     const slashMatch = cleaned.match(/^([\d.]+)\s*\/\s*([\d.]+)$/);
     if (slashMatch) {
       const a = parseFloat(slashMatch[1]);
       const b = parseFloat(slashMatch[2]);
       if (!isNaN(a) && !isNaN(b)) return { min: Math.min(a, b), max: Math.max(a, b), midpoint: (a + b) / 2 };
     }
-
-    // Single number
     const num = parseFloat(cleaned);
     if (!isNaN(num)) return { min: num, max: num, midpoint: num };
   }
@@ -210,9 +132,6 @@ function normalizeToRange(raw: unknown): NormalizedRange | null {
   return null;
 }
 
-/**
- * Normalize all measurements in a row to NormalizedRange.
- */
 function normalizeMeasurements(raw: Record<string, unknown> | null): Record<string, NormalizedRange> {
   const result: Record<string, NormalizedRange> = {};
   if (!raw) return result;
@@ -223,28 +142,13 @@ function normalizeMeasurements(raw: Record<string, unknown> | null): Record<stri
   return result;
 }
 
-// Legacy compat helper (still used by AI estimation)
-function getMidpoint(m: MeasurementValue | null): number | null {
-  if (!m) return null;
-  if (m.mid !== undefined) return m.mid;
-  if (m.value !== undefined) return m.value;
-  if (m.min !== undefined && m.max !== undefined) return (m.min + m.max) / 2;
-  if (m.options && m.options.length > 0) {
-    const nums = m.options.map((o) =>
-      typeof o === "number" ? o : (o.min + o.max) / 2
-    );
-    return nums.reduce((a, b) => a + b, 0) / nums.length;
-  }
-  return null;
-}
-
 interface SizingRow {
   size_label: string;
-  measurements: Record<string, MeasurementValue | null> | null;
+  measurements: Record<string, unknown> | null;
   fit_notes: string | null;
 }
 
-// ── Category normalization ───────────────────────────────────────
+// ── Category normalization ──────────────────────────────────────
 const CATEGORY_ALIAS_MAP: Record<string, string> = {
   tops: "tops", top: "tops", t_shirts: "tops", sweatshirts: "tops", crops: "tops",
   bottoms: "bottoms", bottom: "bottoms", pants: "bottoms", shorts: "bottoms", skirts: "bottoms",
@@ -270,11 +174,9 @@ const CATEGORY_ALIAS_MAP: Record<string, string> = {
 function normalizeCategory(raw: string): string {
   const lower = raw.toLowerCase().trim();
   if (CATEGORY_ALIAS_MAP[lower]) return CATEGORY_ALIAS_MAP[lower];
-  // Convert any remaining spaces/punctuation to underscores for consistency
   return lower.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 }
 
-// Category-to-measurement priority mapping
 const CATEGORY_MEASUREMENT_KEYS: Record<string, string[]> = {
   tops: ["bust", "waist"],
   bottoms: ["waist", "hips"],
@@ -291,224 +193,198 @@ function getMeasurementKeys(category: string): string[] {
   return CATEGORY_MEASUREMENT_KEYS[category] || CATEGORY_MEASUREMENT_KEYS.default;
 }
 
-// ── Confidence scoring (deterministic) ──────────────────────────
+// ── RANGE CONTAINMENT MODEL ─────────────────────────────────────
 
-interface ConfidenceResult {
-  score: number;
-  reasons: string[];
-  matchMethod: "measurement" | "fallback_index" | "fallback_legacy";
-  measurementCoverage: number;
-  avgDeviation: number;
-}
-
-function computeConfidence(
-  matchedKeys: number,
-  avgDeviation: number,
-  usedFallback: boolean,
-  keyDimOverlapCount?: number,
-  totalKeyDims?: number,
-): ConfidenceResult {
-  const reasons: string[] = [];
-  let matchMethod: ConfidenceResult["matchMethod"] = usedFallback ? "fallback_index" : "measurement";
-
-  if (usedFallback) {
-    reasons.push("No sizing chart data — used universal index mapping");
-  }
-
-  let score: number;
-  if (matchedKeys < 2) {
-    score = 0;
-    reasons.push(`Only ${matchedKeys} measurement dimension(s) matched — need at least 2`);
-  } else if (avgDeviation <= 1.0) {
-    score = Math.round(100 - (avgDeviation / 1.0) * 10);
-    reasons.push(`Excellent match — avg deviation ${avgDeviation.toFixed(2)}″`);
-  } else if (avgDeviation <= 2.5) {
-    score = Math.round(89 - ((avgDeviation - 1.0) / 1.5) * 19);
-    reasons.push(`Good match — avg deviation ${avgDeviation.toFixed(2)}″`);
-  } else {
-    score = Math.max(0, Math.round(69 - ((avgDeviation - 2.5) / 2.0) * 69));
-    reasons.push(`High deviation (${avgDeviation.toFixed(2)}″) — low confidence`);
-  }
-
-  // Bonus: key dimensions with overlap boost confidence
-  if (keyDimOverlapCount !== undefined && totalKeyDims !== undefined && totalKeyDims > 0) {
-    const overlapRatio = keyDimOverlapCount / totalKeyDims;
-    if (overlapRatio >= 0.75) {
-      const bonus = Math.round(overlapRatio * 5);
-      score = Math.min(100, score + bonus);
-      reasons.push(`${keyDimOverlapCount}/${totalKeyDims} key dimensions overlap — +${bonus}% bonus`);
-    } else if (overlapRatio < 0.5 && score > 0) {
-      reasons.push(`Only ${keyDimOverlapCount}/${totalKeyDims} key dimensions overlap — no bonus`);
-    }
-  }
-
-  return { score, reasons, matchMethod, measurementCoverage: matchedKeys, avgDeviation };
-}
-
-// ── Interval distance helpers ────────────────────────────────────
-
-/**
- * Compute distance between two intervals. Returns 0 if they overlap.
- */
-function intervalDistance(uMin: number, uMax: number, sMin: number, sMax: number): number {
-  if (uMax < sMin) return sMin - uMax;
-  if (sMax < uMin) return uMin - sMax;
-  return 0; // overlap
-}
-
-/**
- * Compute overlap amount between two intervals. Returns 0 if no overlap.
- */
-function overlapAmount(uMin: number, uMax: number, sMin: number, sMax: number): number {
-  return Math.max(0, Math.min(uMax, sMax) - Math.max(uMin, sMin));
-}
-
-// ── Per-dimension deviation detail for debug ─────────────────────
-interface DimensionDeviation {
-  dimension: string;
-  userMin: number;
-  userMax: number;
-  userMidpoint: number;
-  targetMin: number;
-  targetMax: number;
-  deviation: number;
-  overlap: number;
-  insideRange: boolean; // true if intervals overlap
-}
-
-// Extended findClosestSize returning debug trace
-interface ClosestSizeResult {
-  size: string;
-  fitNotes: string | null;
-  bestScore: number;
-  matchedKeys: number;
-  totalKeys: number;
-  anchorMids: Record<string, number>;
-  anchorRanges: Record<string, NormalizedRange>;
+interface ContainmentResult {
+  /** The single best size, or null if between/outside */
+  exactMatch: string | null;
+  /** If user is between two sizes */
+  betweenSizes: [string, string] | null;
+  /** Explanation of the match */
+  matchExplanation: string;
+  /** Debug info per dimension per size */
+  sizeDetails: Record<string, { dimension: string; userMid: number; rangeMin: number; rangeMax: number; contained: boolean }[]>;
+  /** Which target row was used */
   targetRowUsed: SizingRow | null;
-  allScores: { size: string; score: number; matched: number; totalOverlap: number; deviations: DimensionDeviation[] }[];
+  /** Fit notes */
+  fitNotes: string | null;
 }
 
-function findClosestSize(
+/**
+ * Simple range containment: for each target size, check if the user's
+ * measurement midpoints fall within the size's min-max range.
+ * - If exactly one size contains all measurements → return it.
+ * - If user falls between two sizes → return both.
+ * - If no match → return null with explanation.
+ */
+function findContainedSize(
   anchorMeasurements: Record<string, unknown> | null,
   targetSizes: SizingRow[],
-  fitPreference: string,
-  category?: string
-): ClosestSizeResult | null {
-  if (!anchorMeasurements || targetSizes.length === 0) return null;
+  category: string,
+): ContainmentResult {
+  const noMatch: ContainmentResult = {
+    exactMatch: null,
+    betweenSizes: null,
+    matchExplanation: "Measurement outside this brand's size chart range.",
+    sizeDetails: {},
+    targetRowUsed: null,
+    fitNotes: null,
+  };
 
-  const keys = getMeasurementKeys(category || "default");
-  // Normalize anchor measurements
+  if (!anchorMeasurements || targetSizes.length === 0) return noMatch;
+
+  const keys = getMeasurementKeys(category);
   const anchorNorm = normalizeMeasurements(anchorMeasurements as Record<string, unknown>);
-  const anchorMids: Record<string, number> = {};
-  const anchorRanges: Record<string, NormalizedRange> = {};
 
+  // Get user midpoints for the priority dimensions
+  const userMidpoints: Record<string, number> = {};
   for (const k of keys) {
     if (anchorNorm[k]) {
-      anchorMids[k] = anchorNorm[k].midpoint;
-      anchorRanges[k] = anchorNorm[k];
+      userMidpoints[k] = anchorNorm[k].midpoint;
     }
   }
-
-  // Also pick up any extra measurement keys present in anchor
-  const allMeasurementKeys = new Set<string>(keys);
+  // Also pick up any extra dimensions present
   for (const k of Object.keys(anchorNorm)) {
-    allMeasurementKeys.add(k);
-  }
-
-  // Build user intervals from anchor
-  const userIntervals: Record<string, NormalizedRange> = {};
-  for (const k of allMeasurementKeys) {
-    if (anchorNorm[k]) {
-      userIntervals[k] = anchorNorm[k];
-      if (!anchorRanges[k]) anchorRanges[k] = anchorNorm[k];
+    if (!userMidpoints[k]) {
+      userMidpoints[k] = anchorNorm[k].midpoint;
     }
   }
 
-  if (Object.keys(userIntervals).length === 0) return null;
+  if (Object.keys(userMidpoints).length === 0) return noMatch;
 
-  // Key dimensions set for overlap bonus
-  const keyDimsSet = new Set(keys);
+  // Score each size: count how many dimensions contain the user midpoint
+  const sizeScores: {
+    size: string;
+    row: SizingRow;
+    containedCount: number;
+    checkedCount: number;
+    details: { dimension: string; userMid: number; rangeMin: number; rangeMax: number; contained: boolean }[];
+  }[] = [];
 
-  const allScores: { size: string; score: number; matched: number; totalOverlap: number; deviations: DimensionDeviation[] }[] = [];
+  const allSizeDetails: Record<string, { dimension: string; userMid: number; rangeMin: number; rangeMax: number; contained: boolean }[]> = {};
 
   for (const row of targetSizes) {
     if (!row.measurements) continue;
     const targetNorm = normalizeMeasurements(row.measurements as Record<string, unknown>);
-    let totalScore = 0;
-    let matched = 0;
-    let totalOverlap = 0;
-    const deviations: DimensionDeviation[] = [];
 
-    for (const [k, userRange] of Object.entries(userIntervals)) {
+    let containedCount = 0;
+    let checkedCount = 0;
+    const details: { dimension: string; userMid: number; rangeMin: number; rangeMax: number; contained: boolean }[] = [];
+
+    for (const [k, userMid] of Object.entries(userMidpoints)) {
       const target = targetNorm[k];
       if (!target) continue;
 
-      const dist = intervalDistance(userRange.min, userRange.max, target.min, target.max);
-      const olap = overlapAmount(userRange.min, userRange.max, target.min, target.max);
+      checkedCount++;
+      const contained = userMid >= target.min && userMid <= target.max;
+      if (contained) containedCount++;
 
-      totalScore += dist;
-      matched++;
-      if (olap > 0 && keyDimsSet.has(k)) {
-        totalOverlap += olap;
-      }
-
-      deviations.push({
+      details.push({
         dimension: k,
-        userMin: userRange.min,
-        userMax: userRange.max,
-        userMidpoint: userRange.midpoint,
-        targetMin: target.min,
-        targetMax: target.max,
-        deviation: dist,
-        overlap: olap,
-        insideRange: dist === 0,
+        userMid,
+        rangeMin: target.min,
+        rangeMax: target.max,
+        contained,
       });
     }
 
-    if (matched > 0) {
-      const avgScore = totalScore / matched;
-      allScores.push({ size: row.size_label, score: avgScore, matched, totalOverlap, deviations });
+    allSizeDetails[row.size_label] = details;
+
+    if (checkedCount > 0) {
+      sizeScores.push({ size: row.size_label, row, containedCount, checkedCount, details });
     }
   }
 
-  if (allScores.length === 0) return null;
+  if (sizeScores.length === 0) return { ...noMatch, sizeDetails: allSizeDetails };
 
-  // Sort: lowest avgScore → highest matchedDims → highest totalOverlap
-  allScores.sort((a, b) => {
-    if (a.score !== b.score) return a.score - b.score;
-    if (a.matched !== b.matched) return b.matched - a.matched;
-    return b.totalOverlap - a.totalOverlap;
+  // Sort by containedCount descending, then checkedCount descending
+  sizeScores.sort((a, b) => {
+    if (a.containedCount !== b.containedCount) return b.containedCount - a.containedCount;
+    return b.checkedCount - a.checkedCount;
   });
 
-  const bestEntry = allScores[0];
-  const bestRow = targetSizes.find(r => r.size_label === bestEntry.size) || targetSizes[0];
+  const best = sizeScores[0];
 
-  // Apply fit preference AFTER selecting base size, within same scale track
-  let resultSize = bestRow.size_label;
-  const baseType = classifySizeType(resultSize);
-  if (fitPreference === "fitted") {
-    const down = sizeDown(resultSize);
-    if (down && sizeTypesCompatible(classifySizeType(down), baseType)) resultSize = down;
-  } else if (fitPreference === "relaxed") {
-    const up = sizeUp(resultSize);
-    if (up && sizeTypesCompatible(classifySizeType(up), baseType)) resultSize = up;
+  // If best has all checked dimensions contained → exact match
+  if (best.containedCount > 0 && best.containedCount === best.checkedCount) {
+    return {
+      exactMatch: best.size,
+      betweenSizes: null,
+      matchExplanation: `Your measurements fall within ${best.size} across ${best.containedCount} dimension(s).`,
+      sizeDetails: allSizeDetails,
+      targetRowUsed: best.row,
+      fitNotes: best.row.fit_notes,
+    };
   }
 
-  return {
-    size: resultSize,
-    fitNotes: bestRow.fit_notes,
-    bestScore: bestEntry.score,
-    matchedKeys: bestEntry.matched,
-    totalKeys: Object.keys(userIntervals).length,
-    anchorMids,
-    anchorRanges,
-    targetRowUsed: bestRow,
-    allScores,
-  };
+  // If best has at least one contained dimension, check if user is "between" this and the next size
+  if (best.containedCount > 0) {
+    // Find a second-best that also has containment on different dimensions
+    const secondBest = sizeScores.find((s, i) => i > 0 && s.containedCount > 0);
+    if (secondBest) {
+      return {
+        exactMatch: null,
+        betweenSizes: [best.size, secondBest.size],
+        matchExplanation: `Your measurements fall between ${best.size} and ${secondBest.size}. Some dimensions fit ${best.size} while others fit ${secondBest.size}.`,
+        sizeDetails: allSizeDetails,
+        targetRowUsed: best.row,
+        fitNotes: best.row.fit_notes,
+      };
+    }
+    // Only one size has partial containment — return it as best guess
+    return {
+      exactMatch: best.size,
+      betweenSizes: null,
+      matchExplanation: `Your measurements partially fall within ${best.size} (${best.containedCount}/${best.checkedCount} dimensions).`,
+      sizeDetails: allSizeDetails,
+      targetRowUsed: best.row,
+      fitNotes: best.row.fit_notes,
+    };
+  }
+
+  // No containment at all — find the two closest sizes by checking proximity
+  // Use the first priority dimension's midpoint to find adjacent sizes
+  const primaryKey = keys.find(k => userMidpoints[k] !== undefined);
+  if (primaryKey) {
+    const userVal = userMidpoints[primaryKey];
+    const withRange = sizeScores
+      .map(s => {
+        const d = s.details.find(dd => dd.dimension === primaryKey);
+        if (!d) return null;
+        const midOfRange = (d.rangeMin + d.rangeMax) / 2;
+        return { ...s, rangeMid: midOfRange, dist: Math.abs(userVal - midOfRange) };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a!.dist - b!.dist) as { size: string; row: SizingRow; rangeMid: number; dist: number; details: typeof sizeScores[0]["details"] }[];
+
+    if (withRange.length >= 2) {
+      const lower = withRange[0];
+      const upper = withRange[1];
+      return {
+        exactMatch: null,
+        betweenSizes: [lower.size, upper.size],
+        matchExplanation: `Your ${primaryKey} measurement (${userVal}″) falls between ${lower.size} and ${upper.size}.`,
+        sizeDetails: allSizeDetails,
+        targetRowUsed: lower.row,
+        fitNotes: lower.row.fit_notes,
+      };
+    }
+    if (withRange.length === 1) {
+      return {
+        exactMatch: withRange[0].size,
+        betweenSizes: null,
+        matchExplanation: `${withRange[0].size} is the closest size based on your ${primaryKey} measurement.`,
+        sizeDetails: allSizeDetails,
+        targetRowUsed: withRange[0].row,
+        fitNotes: withRange[0].row.fit_notes,
+      };
+    }
+  }
+
+  return { ...noMatch, sizeDetails: allSizeDetails };
 }
 
-// ── Size scale conversion ────────────────────────────────────────
+// ── Size scale conversion ───────────────────────────────────────
 const LETTER_TO_NUMERIC: Record<string, string> = {
   XXXS: "00", XXS: "0", XS: "2", S: "4", M: "6", L: "10", XL: "12", "2X": "16", "3X": "18", "4X": "20"
 };
@@ -516,7 +392,13 @@ const NUMERIC_TO_LETTER: Record<string, string> = {
   "00": "XXXS", "0": "XXS", "2": "XS", "4": "S", "6": "M", "8": "M", "10": "L", "12": "XL", "14": "XL", "16": "2X", "18": "3X", "20": "4X"
 };
 
-// Brand-specific size scale mappings to universal US numeric index
+const UNIVERSAL_SIZE_MAP: Record<string, number> = {
+  "00": 0, "0": 1, "2": 2, "4": 3, "6": 4, "8": 5, "10": 6, "12": 7, "14": 8, "16": 9, "18": 10, "20": 11,
+  "XXXS": 0, "XXS": 1, "XS": 2, "S": 3, "M": 4, "L": 6, "XL": 7, "2X": 9, "3X": 10, "4X": 11,
+  "34": 0, "36": 1, "38": 2, "40": 3, "42": 4, "44": 5, "46": 6, "48": 7,
+  "22": 0, "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9, "33": 10,
+};
+
 const BRAND_SCALE_MAPS: Record<string, Record<string, number>> = {
   zimmermann: { "0": 1, "1": 2, "2": 4, "3": 6, "4": 8, "5": 10 },
   and_or_collective: { "1": 2, "2": 6, "3": 10 },
@@ -525,13 +407,6 @@ const BRAND_SCALE_MAPS: Record<string, Record<string, number>> = {
   revolve_denim: { "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9 },
   david_koma: { "4": 1, "6": 2, "8": 3, "10": 4, "12": 5, "14": 6, "16": 7 },
   victoria_beckham: { "4": 1, "6": 2, "8": 3, "10": 4, "12": 5, "14": 6, "16": 7 },
-};
-
-const UNIVERSAL_SIZE_MAP: Record<string, number> = {
-  "00": 0, "0": 1, "2": 2, "4": 3, "6": 4, "8": 5, "10": 6, "12": 7, "14": 8, "16": 9, "18": 10, "20": 11,
-  "XXXS": 0, "XXS": 1, "XS": 2, "S": 3, "M": 4, "L": 6, "XL": 7, "2X": 9, "3X": 10, "4X": 11,
-  "34": 0, "36": 1, "38": 2, "40": 3, "42": 4, "44": 5, "46": 6, "48": 7,
-  "22": 0, "23": 0, "24": 1, "25": 2, "26": 3, "27": 4, "28": 5, "29": 6, "30": 7, "31": 8, "32": 9, "33": 10,
 };
 
 function getUniversalIndex(size: string, brandKey?: string): number {
@@ -556,12 +431,8 @@ function isLetterSize(size: string): boolean {
 
 function convertToScale(size: string, targetScale: string): string {
   const upper = size.toUpperCase().trim();
-  if (targetScale === "letter" && isNumericSize(upper)) {
-    return NUMERIC_TO_LETTER[upper] || upper;
-  }
-  if (targetScale === "numeric" && isLetterSize(upper)) {
-    return LETTER_TO_NUMERIC[upper] || upper;
-  }
+  if (targetScale === "letter" && isNumericSize(upper)) return NUMERIC_TO_LETTER[upper] || upper;
+  if (targetScale === "numeric" && isLetterSize(upper)) return LETTER_TO_NUMERIC[upper] || upper;
   return upper;
 }
 
@@ -575,96 +446,72 @@ function snapToAvailableSize(size: string, availableSizes: string[], fitPreferen
 
   let bestSize = availableSizes[0];
   let bestDist = Infinity;
-
   for (const avail of availableSizes) {
     const availIdx = getUniversalIndex(avail, brandKey);
     if (availIdx === -1) continue;
     const dist = Math.abs(availIdx - inputIdx);
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestSize = avail;
-    }
+    if (dist < bestDist) { bestDist = dist; bestSize = avail; }
   }
-
   return bestSize;
 }
 
 function fallbackSizeMapping(anchorSize: string, fitPreference: string, targetScale: string, availableSizes: string[], anchorBrandKey?: string, targetBrandKey?: string, anchorScale?: string): string {
-  const anchorIdx = getUniversalIndex(anchorSize, anchorBrandKey);
   const scalesMatch = anchorScale && anchorScale === targetScale;
-
-  // When scales are identical, skip universal index mapping entirely —
-  // just apply fit preference shift and snap to available sizes.
   if (scalesMatch) {
     let resultSize = anchorSize.toUpperCase().trim();
-    if (fitPreference === "fitted") {
-      const down = sizeDown(resultSize);
-      if (down) resultSize = down;
-    } else if (fitPreference === "relaxed") {
-      const up = sizeUp(resultSize);
-      if (up) resultSize = up;
-    }
+    if (fitPreference === "fitted") { const down = sizeDown(resultSize); if (down) resultSize = down; }
+    else if (fitPreference === "relaxed") { const up = sizeUp(resultSize); if (up) resultSize = up; }
     if (availableSizes.length) {
       const upperAvail = availableSizes.map(s => s.toUpperCase());
-      if (!upperAvail.includes(resultSize)) {
-        resultSize = snapToAvailableSize(resultSize, availableSizes, fitPreference, targetBrandKey);
-      }
+      if (!upperAvail.includes(resultSize)) resultSize = snapToAvailableSize(resultSize, availableSizes, fitPreference, targetBrandKey);
     }
     return resultSize;
   }
-  
+
+  const anchorIdx = getUniversalIndex(anchorSize, anchorBrandKey);
   if (availableSizes.length && anchorIdx !== -1) {
     let adjustedIdx = anchorIdx;
     if (fitPreference === "fitted") adjustedIdx -= 1;
     else if (fitPreference === "relaxed") adjustedIdx += 1;
-
     let bestSize = availableSizes[0];
     let bestDist = Infinity;
     for (const avail of availableSizes) {
       const availIdx = getUniversalIndex(avail, targetBrandKey);
       if (availIdx === -1) continue;
       const dist = Math.abs(availIdx - adjustedIdx);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestSize = avail;
-      }
+      if (dist < bestDist) { bestDist = dist; bestSize = avail; }
     }
     return bestSize;
   }
 
   let resultSize = convertToScale(anchorSize, targetScale);
-  if (fitPreference === "fitted") {
-    const down = sizeDown(resultSize);
-    if (down) resultSize = down;
-  } else if (fitPreference === "relaxed") {
-    const up = sizeUp(resultSize);
-    if (up) resultSize = up;
-  }
-  if (availableSizes.length) {
-    resultSize = snapToAvailableSize(resultSize, availableSizes, fitPreference, targetBrandKey);
-  }
+  if (fitPreference === "fitted") { const down = sizeDown(resultSize); if (down) resultSize = down; }
+  else if (fitPreference === "relaxed") { const up = sizeUp(resultSize); if (up) resultSize = up; }
+  if (availableSizes.length) resultSize = snapToAvailableSize(resultSize, availableSizes, fitPreference, targetBrandKey);
   return resultSize;
 }
 
-// ── AI body measurement estimation from weight + height ─────────
+// ── AI body measurement estimation ──────────────────────────────
+
+interface MeasurementValue {
+  value?: number;
+  min?: number;
+  max?: number;
+  mid?: number;
+  options?: (number | { min: number; max: number })[];
+  unit?: string;
+}
 
 async function estimateBodyMeasurements(
-  weight: string,
-  height: string,
-  fitPreference: string,
+  weight: string, height: string, fitPreference: string,
 ): Promise<Record<string, MeasurementValue> | null> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) return null;
-
   try {
     const prompt = `Given a woman who weighs ${weight} and is ${height} tall with a "${fitPreference.replace(/_/g, " ")}" fit preference, estimate her body measurements in inches. Return bust, waist, hips, underbust, thigh, and shoulders as numeric ranges (min-max). Be realistic and use standard fashion industry measurement guides.`;
-
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [
           { role: "system", content: "You are a body measurement estimation expert. Return measurements as JSON via the tool call." },
@@ -678,18 +525,12 @@ async function estimateBodyMeasurements(
             parameters: {
               type: "object",
               properties: {
-                bust_min: { type: "number" },
-                bust_max: { type: "number" },
-                waist_min: { type: "number" },
-                waist_max: { type: "number" },
-                hips_min: { type: "number" },
-                hips_max: { type: "number" },
-                underbust_min: { type: "number" },
-                underbust_max: { type: "number" },
-                thigh_min: { type: "number" },
-                thigh_max: { type: "number" },
-                shoulders_min: { type: "number" },
-                shoulders_max: { type: "number" },
+                bust_min: { type: "number" }, bust_max: { type: "number" },
+                waist_min: { type: "number" }, waist_max: { type: "number" },
+                hips_min: { type: "number" }, hips_max: { type: "number" },
+                underbust_min: { type: "number" }, underbust_max: { type: "number" },
+                thigh_min: { type: "number" }, thigh_max: { type: "number" },
+                shoulders_min: { type: "number" }, shoulders_max: { type: "number" },
               },
               required: ["bust_min", "bust_max", "waist_min", "waist_max", "hips_min", "hips_max"],
               additionalProperties: false,
@@ -699,30 +540,16 @@ async function estimateBodyMeasurements(
         tool_choice: { type: "function", function: { name: "body_measurements" } },
       }),
     });
-
     if (!response.ok) return null;
     const data = await response.json();
     const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
     if (!toolCall) return null;
-
     const args = JSON.parse(toolCall.function.arguments);
     const result: Record<string, MeasurementValue> = {};
-
-    const pairs = [
-      ["bust", "bust_min", "bust_max"],
-      ["waist", "waist_min", "waist_max"],
-      ["hips", "hips_min", "hips_max"],
-      ["underbust", "underbust_min", "underbust_max"],
-      ["thigh", "thigh_min", "thigh_max"],
-      ["shoulders", "shoulders_min", "shoulders_max"],
-    ];
-
+    const pairs = [["bust", "bust_min", "bust_max"], ["waist", "waist_min", "waist_max"], ["hips", "hips_min", "hips_max"], ["underbust", "underbust_min", "underbust_max"], ["thigh", "thigh_min", "thigh_max"], ["shoulders", "shoulders_min", "shoulders_max"]];
     for (const [key, minKey, maxKey] of pairs) {
-      if (args[minKey] !== undefined && args[maxKey] !== undefined) {
-        result[key] = { min: args[minKey], max: args[maxKey], unit: "in" };
-      }
+      if (args[minKey] !== undefined && args[maxKey] !== undefined) result[key] = { min: args[minKey], max: args[maxKey], unit: "in" };
     }
-
     return Object.keys(result).length > 0 ? result : null;
   } catch (e) {
     console.error("Body estimation failed:", e);
@@ -735,38 +562,21 @@ async function estimateBodyMeasurements(
 async function scrapeProductFit(productUrl: string): Promise<string | null> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) return null;
-
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
-    const pageResp = await fetch(productUrl, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; ALTAANA/1.0)" },
-    });
+    const pageResp = await fetch(productUrl, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; ALTAANA/1.0)" } });
     clearTimeout(timeout);
-
     if (!pageResp.ok) return null;
     const html = await pageResp.text();
-
-    const stripped = html
-      .replace(/<script[\s\S]*?<\/script>/gi, "")
-      .replace(/<style[\s\S]*?<\/style>/gi, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 12000);
-
+    const stripped = html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 12000);
     if (stripped.length < 100) return null;
-
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [
-          { role: "system", content: "Extract fit, sizing, and fabric/material info from this product page text. Return a concise summary (under 80 words) covering: fit details (runs small/large, oversized, fitted, true to size, size up/down recommendations), fabric composition (e.g. 95% polyester 5% spandex), stretch level (no stretch, slight stretch, high stretch), and any specific measurements mentioned. If no info is found, return empty string." },
+          { role: "system", content: "Extract fit, sizing, and fabric/material info from this product page text. Return a concise summary (under 80 words) covering: fit details, fabric composition, stretch level, and any specific measurements mentioned. If no info is found, return empty string." },
           { role: "user", content: stripped },
         ],
         tools: [{
@@ -774,27 +584,16 @@ async function scrapeProductFit(productUrl: string): Promise<string | null> {
           function: {
             name: "extract_fit",
             description: "Extract product fit and fabric details",
-            parameters: {
-              type: "object",
-              properties: {
-                fit_summary: { type: "string", description: "Concise fit and fabric summary or empty string if none found" },
-              },
-              required: ["fit_summary"],
-              additionalProperties: false,
-            },
+            parameters: { type: "object", properties: { fit_summary: { type: "string" } }, required: ["fit_summary"], additionalProperties: false },
           },
         }],
         tool_choice: { type: "function", function: { name: "extract_fit" } },
       }),
     });
-
     if (!response.ok) return null;
     const data = await response.json();
     const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
-    if (toolCall) {
-      const args = JSON.parse(toolCall.function.arguments);
-      return args.fit_summary || null;
-    }
+    if (toolCall) { const args = JSON.parse(toolCall.function.arguments); return args.fit_summary || null; }
     return null;
   } catch (e) {
     console.error("Product scrape failed:", e);
@@ -812,49 +611,14 @@ interface BulletContext {
   fitNotes: string | null;
   targetFitTendency: string | null;
   productFitSummary: string | null;
-  /** Per-dimension overlap/deviation details for the chosen size */
-  deviations?: DimensionDeviation[];
-  /** Runner-up size and its score, if close to the winner */
-  runnerUp?: { size: string; score: number; deviations: DimensionDeviation[] } | null;
-  /** Winning size score */
-  winnerScore?: number;
-}
-
-/**
- * Build a human-readable overlap summary from deviations for the AI prompt.
- */
-function buildOverlapSummary(deviations: DimensionDeviation[], size: string): string {
-  const parts: string[] = [];
-  for (const d of deviations) {
-    if (d.insideRange && d.overlap > 0) {
-      parts.push(`${d.dimension}: your range (${d.userMin}–${d.userMax}″) overlaps ${size} (${d.targetMin}–${d.targetMax}″) by ${d.overlap.toFixed(1)}″`);
-    } else if (d.deviation > 0) {
-      parts.push(`${d.dimension}: ${d.deviation.toFixed(1)}″ gap between your range and ${size}`);
-    }
-  }
-  return parts.join("; ");
+  matchExplanation: string;
+  betweenSizes: [string, string] | null;
 }
 
 async function generateBullets(context: BulletContext): Promise<string[]> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    return generateFallbackBullets(context);
-  }
-
+  if (!LOVABLE_API_KEY) return generateFallbackBullets(context);
   try {
-    // Build overlap context lines
-    let overlapContext = "";
-    if (context.deviations && context.deviations.length > 0) {
-      overlapContext = `- Measurement overlap for chosen size (${context.recommendedSize}): ${buildOverlapSummary(context.deviations, context.recommendedSize)}`;
-    }
-    let runnerUpContext = "";
-    if (context.runnerUp && context.winnerScore !== undefined) {
-      const scoreDiff = Math.abs(context.runnerUp.score - context.winnerScore);
-      if (scoreDiff < 0.5) {
-        runnerUpContext = `- Runner-up size ${context.runnerUp.size} was very close (${scoreDiff.toFixed(2)}″ difference). ${buildOverlapSummary(context.runnerUp.deviations, context.runnerUp.size)}`;
-      }
-    }
-
     const prompt = `You are a sizing expert for a women's fashion sizing tool called ALTAANA. Generate exactly 3 short, helpful bullet points explaining why we recommend size "${context.recommendedSize}" in ${context.targetBrand}.
 
 Context:
@@ -863,24 +627,21 @@ Context:
 ${context.fitNotes ? `- Brand fit notes: ${context.fitNotes}` : ""}
 ${context.targetFitTendency ? `- ${context.targetBrand} generally ${context.targetFitTendency.replace(/_/g, " ")}` : ""}
 ${context.productFitSummary ? `- This specific product: ${context.productFitSummary}` : ""}
-${overlapContext ? overlapContext : ""}
-${runnerUpContext ? runnerUpContext : ""}
+- Match result: ${context.matchExplanation}
+${context.betweenSizes ? `- User is between sizes ${context.betweenSizes[0]} and ${context.betweenSizes[1]}` : ""}
 
 Rules:
 - Each bullet must be under 15 words
 - First bullet references what they wear in their anchor brand
-- Second bullet: if measurement overlap data is available, reference which dimensions overlap (e.g. "Your waist overlaps Size 14, giving a reliable fit"). If sizes were close, mention what would cause sizing up or down in one clause.
-- Third bullet: ONLY mention fabric/stretch/material if productFitSummary actually contains fabric info (e.g. elastane, stretch, silk). Otherwise, mention the fit preference or brand tendency.
-- Be definitive and confident, no hedging language
+- Second bullet explains the measurement match clearly
+- Third bullet: ONLY mention fabric/stretch if productFitSummary contains fabric info. Otherwise mention fit preference or brand tendency.
+- Be definitive and confident
 - Do NOT use bullet point characters, just return plain text
-- Do NOT invent fabric claims — only reference fabric if product context explicitly mentions it`;
+- Do NOT invent fabric claims`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [
           { role: "system", content: "You are a concise sizing expert. Return exactly 3 lines, one bullet per line. No numbering, no bullet characters." },
@@ -893,14 +654,7 @@ Rules:
             description: "Return 3 explanation bullets for a size recommendation",
             parameters: {
               type: "object",
-              properties: {
-                bullets: {
-                  type: "array",
-                  items: { type: "string" },
-                  minItems: 3,
-                  maxItems: 3,
-                },
-              },
+              properties: { bullets: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 3 } },
               required: ["bullets"],
               additionalProperties: false,
             },
@@ -909,92 +663,70 @@ Rules:
         tool_choice: { type: "function", function: { name: "size_bullets" } },
       }),
     });
-
-    if (!response.ok) {
-      console.error("AI gateway error:", response.status, await response.text());
-      return generateFallbackBullets(context);
-    }
-
+    if (!response.ok) return generateFallbackBullets(context);
     const data = await response.json();
     const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
     if (toolCall) {
       const args = JSON.parse(toolCall.function.arguments);
-      if (args.bullets && Array.isArray(args.bullets) && args.bullets.length === 3) {
-        return args.bullets;
-      }
+      if (Array.isArray(args.bullets) && args.bullets.length >= 3) return args.bullets.slice(0, 3);
     }
-
     return generateFallbackBullets(context);
   } catch (e) {
-    console.error("AI bullet generation failed:", e);
+    console.error("Bullet generation failed:", e);
     return generateFallbackBullets(context);
   }
 }
 
 function generateFallbackBullets(context: BulletContext): string[] {
-  const anchor = context.anchorBrands[0];
-  const bullets = [
-    `You wear ${anchor.size} in ${anchor.displayName}`,
-  ];
-
-  // Second bullet: overlap-aware or brand tendency
-  const overlapping = (context.deviations || []).filter(d => d.insideRange && d.overlap > 0);
-  if (overlapping.length > 0) {
-    const dims = overlapping.map(d => d.dimension).join(" and ");
-    bullets.push(`Your ${dims} measurements overlap ${context.recommendedSize} for a reliable fit`);
-  } else if (context.runnerUp && context.winnerScore !== undefined && Math.abs(context.runnerUp.score - context.winnerScore) < 0.5) {
-    bullets.push(`Between ${context.recommendedSize} and ${context.runnerUp.size} — chosen for better overall overlap`);
-  } else if (context.targetFitTendency) {
-    bullets.push(`${context.targetBrand} ${context.targetFitTendency.replace(/_/g, " ")}`);
-  } else if (context.fitNotes) {
-    bullets.push(context.fitNotes);
+  const bullets: string[] = [];
+  if (context.anchorBrands.length > 0) {
+    const a = context.anchorBrands[0];
+    bullets.push(`Based on your ${a.size} in ${a.displayName}`);
   } else {
-    bullets.push(`${context.targetBrand} sizing aligns with standard US sizing`);
+    bullets.push(`Recommended for ${context.targetBrand}`);
   }
 
-  // Third bullet: only mention fabric if product fit summary actually has stretch/fabric info
-  const hasFabricInfo = context.productFitSummary && /stretch|elastane|spandex|lycra|silk|cotton|poly/i.test(context.productFitSummary);
-  if (hasFabricInfo) {
-    bullets.push(context.productFitSummary!.length > 60 ? context.productFitSummary!.slice(0, 57) + "…" : context.productFitSummary!);
+  if (context.betweenSizes) {
+    bullets.push(`You're between ${context.betweenSizes[0]} and ${context.betweenSizes[1]}; ${context.recommendedSize} is the better fit`);
   } else {
-    const prefLabel = context.fitPreference.replace(/_/g, " ");
-    bullets.push(`Adjusted for your ${prefLabel} fit preference`);
+    bullets.push(`Your measurements fall within ${context.recommendedSize} for this brand`);
+  }
+
+  const hasFabric = context.productFitSummary && /stretch|elastane|spandex|silk|cotton/i.test(context.productFitSummary);
+  if (hasFabric) {
+    bullets.push(`This item's fabric may affect the fit`);
+  } else if (context.targetFitTendency) {
+    bullets.push(`${context.targetBrand} tends to ${context.targetFitTendency.replace(/_/g, " ")}`);
+  } else {
+    const pref = context.fitPreference === "true_to_size" ? "standard" : context.fitPreference;
+    bullets.push(`Selected for your ${pref} fit preference`);
   }
 
   return bullets;
 }
 
-// ── Brand comparisons ───────────────────────────────────────────
+// ── Comparisons ─────────────────────────────────────────────────
+
+interface BrandComparison {
+  brandName: string;
+  size: string;
+  fitTag: string;
+}
 
 function generateComparisons(
-  anchorBrands: { displayName: string; size: string }[],
+  anchorBrands: { displayName: string; size: string; brandKey: string }[],
   targetBrand: string,
   recommendedSize: string,
   targetFitTendency: string | null,
-): { brandName: string; size: string; fitTag: string }[] {
-  const comparisons: { brandName: string; size: string; fitTag: string }[] = [];
-
+): BrandComparison[] {
+  const comparisons: BrandComparison[] = [];
   for (const anchor of anchorBrands) {
-    const anchorIdx = sizeIndex(anchor.size);
-    const targetIdx = sizeIndex(recommendedSize);
     let fitTag = "true to size";
-    if (anchorIdx !== -1 && targetIdx !== -1) {
-      if (targetIdx > anchorIdx) fitTag = "runs small";
-      else if (targetIdx < anchorIdx) fitTag = "runs large";
+    if (targetFitTendency) {
+      fitTag = targetFitTendency.replace(/_/g, " ");
     }
-    comparisons.push({
-      brandName: anchor.displayName,
-      size: anchor.size,
-      fitTag,
-    });
+    comparisons.push({ brandName: anchor.displayName, size: anchor.size, fitTag });
   }
-
-  comparisons.push({
-    brandName: targetBrand,
-    size: recommendedSize,
-    fitTag: targetFitTendency?.replace(/_/g, " ") || "true to size",
-  });
-
   return comparisons;
 }
 
@@ -1042,25 +774,19 @@ Deno.serve(async (req) => {
     const targetSizeScale = targetBrand?.size_scale || "letter";
     const availableSizes: string[] = (targetBrand?.available_sizes as string[]) || [];
 
-    // 1b. Classify anchor size type and scale track
+    // 1b. Classify anchor
     const anchorBrandKey0 = anchor_brands[0]?.brandKey;
     const anchorSizeLabel0 = anchor_brands[0]?.size || "";
     const anchorSizeType = classifySizeType(anchorSizeLabel0, anchorBrandKey0);
     const anchorScaleTrack = sizeTypeToTrack(anchorSizeType);
-    const anchorIsBrandSpecific = isBrandSpecificScale(anchorBrandKey0);
-    const anchorDbScales = sizeTypeToDbScale(anchorSizeType);
 
     // 2. Normalize category
     const detectedCategoryRaw = target_category || "tops";
     const category = normalizeCategory(detectedCategoryRaw);
 
-    // 2b. Also build a list of possible raw category strings that might exist in DB
-    // (the DB may have un-normalized values like "sports bras", "dresses ", "pants")
+    // Category variants for DB query
     const categoryVariants = new Set<string>([category]);
-    // Add the raw input too (lowercased, trimmed)
-    const rawLower = detectedCategoryRaw.toLowerCase().trim();
-    categoryVariants.add(rawLower);
-    // Add common DB variants
+    categoryVariants.add(detectedCategoryRaw.toLowerCase().trim());
     const REVERSE_CATEGORY_MAP: Record<string, string[]> = {
       tops: ["tops", "t_shirts", "sweatshirts", "crops"],
       bottoms: ["bottoms", "pants", "shorts", "skirts", "leggings", "leggings_regular", "leggings_short", "trousers_long", "trousers_regular", "trousers_short"],
@@ -1080,7 +806,7 @@ Deno.serve(async (req) => {
       for (const v of REVERSE_CATEGORY_MAP[category]) categoryVariants.add(v);
     }
 
-    // Query target sizing data: try normalized + variants
+    // Query target sizing data
     const ROW_QUALITY_THRESHOLD = 2;
     let targetSizingDataRaw: Array<{ size_label: string; measurements: Record<string, unknown> | null; fit_notes: string | null; size_scale: string; row_quality: number }> = [];
     const { data: targetDataExact } = await supabase
@@ -1092,20 +818,17 @@ Deno.serve(async (req) => {
 
     targetSizingDataRaw = targetDataExact || [];
 
-    // If quality filter was too strict, retry without it
-    let targetRowsExcludedByQuality = 0;
+    // Retry without quality filter
     if (targetSizingDataRaw.length === 0) {
       const { data: targetDataAll } = await supabase
         .from("sizing_charts")
         .select("size_label, measurements, fit_notes, size_scale, row_quality")
         .eq("brand_key", target_brand_key)
         .in("category", [...categoryVariants]);
-      const allRows = targetDataAll || [];
-      targetRowsExcludedByQuality = allRows.filter(r => (r.row_quality ?? 0) < ROW_QUALITY_THRESHOLD).length;
-      targetSizingDataRaw = allRows;
+      targetSizingDataRaw = targetDataAll || [];
     }
 
-    // Brand-only fallback if no rows matched ANY category variant
+    // Brand-only fallback
     let categoryFallbackUsed = false;
     if (targetSizingDataRaw.length === 0) {
       const { data: targetDataAll } = await supabase
@@ -1117,80 +840,34 @@ Deno.serve(async (req) => {
       categoryFallbackUsed = true;
     }
 
-    // ── TRACK SPLITTING ─────────────────────────────────────────
-    // Split target rows into separate scale tracks
+    // Track splitting
     const allTargetRows = targetSizingDataRaw;
-    const targetRowsBeforeFilter = allTargetRows.length;
-    const targetIsBrandSpecific = isBrandSpecificScale(target_brand_key);
-
-    // Classify each target row and group by track
-    const targetTrackGroups: Record<ScaleTrack, typeof allTargetRows> = {
-      letter: [],
-      numeric: [],
-      brand_specific: [],
-      denim: [],
-    };
+    const targetTrackGroups: Record<ScaleTrack, typeof allTargetRows> = { letter: [], numeric: [], brand_specific: [], denim: [] };
     for (const row of allTargetRows) {
       const st = classifySizeType(row.size_label, target_brand_key);
       const track = sizeTypeToTrack(st);
       targetTrackGroups[track].push(row);
     }
+    const targetTracksAvailable: ScaleTrack[] = (Object.keys(targetTrackGroups) as ScaleTrack[]).filter(t => targetTrackGroups[t].length > 0);
 
-    // Determine which tracks are available
-    const targetTracksAvailable: ScaleTrack[] = (Object.keys(targetTrackGroups) as ScaleTrack[])
-      .filter(t => targetTrackGroups[t].length > 0);
-
-    // Select the preferred track for scoring
     let trackUsed: ScaleTrack = anchorScaleTrack;
-    let trackSelectionReason = "";
     let conversionFallbackUsed = false;
 
-    if (anchorIsBrandSpecific) {
-      // Brand-specific anchor → ONLY use measurement matching, never universal index
-      // Prefer matching the target's track that has the most measurement data
-      if (targetTrackGroups.letter.length > 0 && targetTrackGroups.numeric.length > 0) {
-        // Both exist — we'll score both and pick the best (handled below)
-        trackUsed = "letter"; // start with letter, will try both
-        trackSelectionReason = "Anchor is brand-specific; will score both letter and numeric tracks";
-      } else if (targetTrackGroups.letter.length > 0) {
-        trackUsed = "letter";
-        trackSelectionReason = "Anchor is brand-specific; target only has letter track";
-      } else if (targetTrackGroups.numeric.length > 0) {
-        trackUsed = "numeric";
-        trackSelectionReason = "Anchor is brand-specific; target only has numeric track";
-      } else if (targetTrackGroups.brand_specific.length > 0) {
-        trackUsed = "brand_specific";
-        trackSelectionReason = "Both anchor and target are brand-specific";
-      } else {
-        trackUsed = anchorScaleTrack;
-        trackSelectionReason = "No matching tracks found; using anchor track as fallback";
-      }
-    } else if (targetTrackGroups[anchorScaleTrack]?.length > 0) {
+    if (targetTrackGroups[anchorScaleTrack]?.length > 0) {
       trackUsed = anchorScaleTrack;
-      trackSelectionReason = `Anchor track "${anchorScaleTrack}" matches available target track`;
     } else if (targetTracksAvailable.length > 0) {
-      // Prefer letter > numeric > denim > brand_specific when anchor track unavailable
       const preferred: ScaleTrack[] = ["letter", "numeric", "denim", "brand_specific"];
       trackUsed = preferred.find(t => targetTrackGroups[t].length > 0) || targetTracksAvailable[0];
       conversionFallbackUsed = true;
-      trackSelectionReason = `Anchor track "${anchorScaleTrack}" not in target; fell back to "${trackUsed}"`;
     }
 
-    // Get target rows for the chosen track
     let targetSizingData = targetTrackGroups[trackUsed] || [];
-    let targetSizeTypeSearched: string = trackUsed;
-
-    // If no rows in preferred track, use all rows with conversion fallback
     if (targetSizingData.length === 0 && allTargetRows.length > 0) {
       targetSizingData = allTargetRows;
       conversionFallbackUsed = true;
-      trackSelectionReason += "; using all rows as final fallback";
     }
 
-    const targetRowsAfterFilter = targetSizingData.length;
-    const targetRowsFilteredOut = targetRowsBeforeFilter - targetRowsAfterFilter;
-
-    // 3. Fetch anchor brand sizing data — try category variants, then brand-only fallback
+    // 3. Fetch anchor brand sizing data
     const anchorBrandKeys = anchor_brands.map((a: { brandKey: string }) => a.brandKey);
     let anchorSizingDataAll: Array<{ brand_key: string; size_label: string; measurements: Record<string, unknown> | null; size_scale: string; row_quality: number }> = [];
     const { data: anchorDataExact } = await supabase
@@ -1202,7 +879,6 @@ Deno.serve(async (req) => {
 
     anchorSizingDataAll = anchorDataExact || [];
 
-    // Brand-only fallback for anchor (also try without quality filter)
     if (anchorSizingDataAll.length === 0) {
       const { data: anchorDataAll } = await supabase
         .from("sizing_charts")
@@ -1211,177 +887,108 @@ Deno.serve(async (req) => {
       anchorSizingDataAll = anchorDataAll || [];
     }
 
-    // Filter anchor rows: for brand-specific brands, accept all their rows;
-    // otherwise filter to same size type only
-    const anchorSizingData = anchorSizingDataAll.filter(
-      (r) => {
-        const rowType = classifySizeType(r.size_label, r.brand_key || anchorBrandKey0);
-        return sizeTypesCompatible(rowType, anchorSizeType);
-      }
-    );
+    const anchorSizingData = anchorSizingDataAll.filter(r => {
+      const rowType = classifySizeType(r.size_label, r.brand_key || anchorBrandKey0);
+      return sizeTypesCompatible(rowType, anchorSizeType);
+    });
 
     // 4. Determine recommended size
-    let recommendedSize: string;
+    let recommendedSize: string = "";
     let fitNotes: string | null = null;
     let usedFallback = false;
     let usedEstimated = false;
-    let closestResult: ClosestSizeResult | null = null;
+    let containmentResult: ContainmentResult | null = null;
     const isSameBrand = anchorBrandKey0 === target_brand_key;
-    const isSameScale = !conversionFallbackUsed;
-
-    let needMoreInfoEarly = false;
-
-    // Debug trace collectors
-    let anchorMeasurementsUsed: Record<string, MeasurementValue | null> | null = null;
 
     // ── SAME-BRAND SHORTCUT ─────────────────────────────────────
-    // When anchor and target are the same brand, return the anchor size
-    // directly. No universal index, no scale conversion. Only apply
-    // fit preference shift if not "true_to_size".
     if (isSameBrand) {
       recommendedSize = anchor_brands[0].size;
       const fp = fit_preference || "true_to_size";
-      if (fp === "fitted") {
-        const down = sizeDown(recommendedSize);
-        if (down) recommendedSize = down;
-      } else if (fp === "relaxed") {
-        const up = sizeUp(recommendedSize);
-        if (up) recommendedSize = up;
-      }
-      // Snap to available sizes (same brand, so no index conversion needed)
+      if (fp === "fitted") { const down = sizeDown(recommendedSize); if (down) recommendedSize = down; }
+      else if (fp === "relaxed") { const up = sizeUp(recommendedSize); if (up) recommendedSize = up; }
       if (availableSizes.length) {
         const upper = recommendedSize.toUpperCase().trim();
         if (!availableSizes.map(s => s.toUpperCase()).includes(upper)) {
-          // Only snap within same-scale sizes, no universal index
           recommendedSize = snapToAvailableSize(recommendedSize, availableSizes, fp, target_brand_key);
         }
       }
     } else {
-      // ── CROSS-BRAND LOGIC ───────────────────────────────────────
+      // ── CROSS-BRAND: RANGE CONTAINMENT ────────────────────────
 
-      // GUARD: brand-specific anchors must NEVER use universal index mapping
-      const blockUniversalIndex = anchorIsBrandSpecific || targetIsBrandSpecific;
-
-      // If weight/height provided, estimate body measurements and use them
+      // Estimate body measurements if weight/height provided
       let estimatedMeasurements: Record<string, MeasurementValue> | null = null;
       if (weight || height) {
-        estimatedMeasurements = await estimateBodyMeasurements(
-          weight || "",
-          height || "",
-          fit_preference || "true_to_size",
-        );
+        estimatedMeasurements = await estimateBodyMeasurements(weight || "", height || "", fit_preference || "true_to_size");
         if (estimatedMeasurements) usedEstimated = true;
       }
 
-      if (targetSizingData?.length && (anchorSizingData?.length || estimatedMeasurements)) {
-        let anchorMeasurements: Record<string, MeasurementValue | null> | null = null;
-
-        if (anchorSizingData?.length) {
-          const anchorBrand = anchor_brands[0];
-          const anchorRow = anchorSizingData.find(
-            (r: { brand_key: any; size_label: any; measurements: any }) =>
-              r.brand_key === anchorBrand.brandKey &&
-              r.size_label.toUpperCase() === anchorBrand.size.toUpperCase()
-          );
-          if (anchorRow?.measurements) {
-            anchorMeasurements = anchorRow.measurements as Record<string, MeasurementValue | null>;
-          }
-        }
-
-        // Blend estimated measurements with anchor measurements
-        if (estimatedMeasurements) {
-          if (anchorMeasurements) {
-            for (const [k, v] of Object.entries(estimatedMeasurements)) {
-              if (!anchorMeasurements[k]) {
-                anchorMeasurements[k] = v;
-              }
-            }
-          } else {
-            anchorMeasurements = estimatedMeasurements;
-          }
-        }
-
-        anchorMeasurementsUsed = anchorMeasurements;
-
-        if (anchorMeasurements) {
-          // ── MULTI-TRACK SCORING for brand-specific anchors ──────
-          // When anchor is brand-specific and target has both letter+numeric,
-          // score BOTH tracks and pick the result with lower avgDeviation.
-          if (anchorIsBrandSpecific && targetTrackGroups.letter.length > 0 && targetTrackGroups.numeric.length > 0) {
-            const resultLetter = findClosestSize(
-              anchorMeasurements,
-              targetTrackGroups.letter as SizingRow[],
-              fit_preference || "true_to_size",
-              category
-            );
-            const resultNumeric = findClosestSize(
-              anchorMeasurements,
-              targetTrackGroups.numeric as SizingRow[],
-              fit_preference || "true_to_size",
-              category
-            );
-
-            // Pick best: lower avgScore, then higher matchedKeys
-            if (resultLetter && resultNumeric) {
-              if (resultNumeric.bestScore < resultLetter.bestScore ||
-                  (resultNumeric.bestScore === resultLetter.bestScore && resultNumeric.matchedKeys > resultLetter.matchedKeys)) {
-                closestResult = resultNumeric;
-                trackUsed = "numeric";
-                trackSelectionReason = "Brand-specific anchor: numeric track scored better";
-              } else {
-                closestResult = resultLetter;
-                trackUsed = "letter";
-                trackSelectionReason = "Brand-specific anchor: letter track scored better";
-              }
-            } else {
-              closestResult = resultLetter || resultNumeric;
-              trackUsed = resultLetter ? "letter" : "numeric";
-              trackSelectionReason = `Brand-specific anchor: only ${trackUsed} track produced results`;
-            }
-          } else {
-            // Standard single-track scoring
-            closestResult = findClosestSize(
-              anchorMeasurements,
-              targetSizingData as SizingRow[],
-              fit_preference || "true_to_size",
-              category
-            );
-          }
-
-          if (closestResult) {
-            if (isSameScale) {
-              recommendedSize = closestResult.size;
-            } else {
-              recommendedSize = convertToScale(closestResult.size, targetSizeScale);
-            }
-            fitNotes = closestResult.fitNotes;
-          } else if (!blockUniversalIndex) {
-            usedFallback = true;
-            recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
-          } else {
-            // Brand-specific: can't use universal index, trigger NEED_MORE_INFO
-            usedFallback = true;
-            needMoreInfoEarly = true;
-            recommendedSize = "";
-          }
-        } else if (!blockUniversalIndex) {
-          usedFallback = true;
-          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
-        } else {
-          usedFallback = true;
-          needMoreInfoEarly = true;
-          recommendedSize = "";
-        }
-      } else if (!blockUniversalIndex) {
-        usedFallback = true;
-        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchor_brands[0].brandKey, target_brand_key, anchorSizeType);
-      } else {
-        usedFallback = true;
-        needMoreInfoEarly = true;
-        recommendedSize = "";
+      // Get anchor measurements
+      let anchorMeasurements: Record<string, unknown> | null = null;
+      if (anchorSizingData?.length) {
+        const anchorBrand = anchor_brands[0];
+        const anchorRow = anchorSizingData.find(
+          (r) => r.brand_key === anchorBrand.brandKey && r.size_label.toUpperCase() === anchorBrand.size.toUpperCase()
+        );
+        if (anchorRow?.measurements) anchorMeasurements = anchorRow.measurements;
       }
 
-      // Final snap — prefer sizes within the CHOSEN TRACK only
+      // Blend estimated measurements
+      if (estimatedMeasurements) {
+        if (anchorMeasurements) {
+          for (const [k, v] of Object.entries(estimatedMeasurements)) {
+            if (!(anchorMeasurements as Record<string, unknown>)[k]) {
+              (anchorMeasurements as Record<string, unknown>)[k] = v;
+            }
+          }
+        } else {
+          anchorMeasurements = estimatedMeasurements as Record<string, unknown>;
+        }
+      }
+
+      if (anchorMeasurements && targetSizingData.length > 0) {
+        containmentResult = findContainedSize(
+          anchorMeasurements,
+          targetSizingData as SizingRow[],
+          category,
+        );
+
+        if (containmentResult.exactMatch) {
+          recommendedSize = containmentResult.exactMatch;
+          fitNotes = containmentResult.fitNotes;
+        } else if (containmentResult.betweenSizes) {
+          // Between two sizes — pick based on fit preference
+          const [sizeA, sizeB] = containmentResult.betweenSizes;
+          const fp = fit_preference || "true_to_size";
+          const idxA = getUniversalIndex(sizeA, target_brand_key);
+          const idxB = getUniversalIndex(sizeB, target_brand_key);
+          if (fp === "fitted") {
+            recommendedSize = idxA <= idxB ? sizeA : sizeB;
+          } else if (fp === "relaxed") {
+            recommendedSize = idxA >= idxB ? sizeA : sizeB;
+          } else {
+            // true_to_size — pick the first (closest match)
+            recommendedSize = sizeA;
+          }
+          fitNotes = containmentResult.fitNotes;
+        } else {
+          // No containment — fallback
+          usedFallback = true;
+          recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchorBrandKey0, target_brand_key, anchorSizeType);
+        }
+      } else {
+        // No measurements available — fallback
+        usedFallback = true;
+        recommendedSize = fallbackSizeMapping(anchor_brands[0].size, fit_preference || "true_to_size", targetSizeScale, availableSizes, anchorBrandKey0, target_brand_key, anchorSizeType);
+      }
+
+      // Apply fit preference shift for exact matches (not between-sizes)
+      if (!usedFallback && containmentResult?.exactMatch) {
+        const fp = fit_preference || "true_to_size";
+        if (fp === "fitted") { const down = sizeDown(recommendedSize); if (down) recommendedSize = down; }
+        else if (fp === "relaxed") { const up = sizeUp(recommendedSize); if (up) recommendedSize = up; }
+      }
+
+      // Final snap to available sizes within chosen track
       if (recommendedSize) {
         const trackSizeFilter = (s: string) => {
           const st = classifySizeType(s, target_brand_key);
@@ -1397,121 +1004,15 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── Confidence scoring ──────────────────────────────────────
-    let confidence: ConfidenceResult;
-    if (isSameBrand) {
-      confidence = { score: 100, reasons: ["Same brand — direct size match"], matchMethod: "measurement", measurementCoverage: 0, avgDeviation: 0 };
-    } else {
-      const matchedKeys = closestResult?.matchedKeys ?? 0;
-      const avgDeviation = closestResult?.bestScore ?? Infinity;
-
-      // Count how many key dimensions had overlapping intervals
-      const keys = getMeasurementKeys(category);
-      const keyDimsSet = new Set(keys);
-      let keyDimOverlapCount = 0;
-      if (closestResult?.allScores?.[0]?.deviations) {
-        for (const d of closestResult.allScores[0].deviations) {
-          if (keyDimsSet.has(d.dimension) && d.insideRange) {
-            keyDimOverlapCount++;
-          }
-        }
-      }
-
-      confidence = computeConfidence(matchedKeys, avgDeviation, usedFallback, keyDimOverlapCount, keys.length);
-    }
-
-    // Penalize confidence when conversion fallback was used (cross-system)
-    if (conversionFallbackUsed && confidence.score > 0) {
-      confidence.score = Math.min(confidence.score, 70);
-      confidence.reasons.push("Confidence capped — size system conversion used (anchor: " + anchorSizeType + ", target rows: " + targetSizeTypeSearched + ")");
-    }
-
-    // ── Determine which measurement to ask for by category ──────
-    function getAskForMeasurement(cat: string): string {
-      const lower = cat.toLowerCase();
-      if (["denim", "bottoms"].includes(lower)) return "waist";
-      if (["dresses"].includes(lower)) return "hips";
-      if (["swim", "sports_bras"].includes(lower)) return "underbust";
-      return "bust"; // tops, outerwear, default
-    }
-
-    // ── Hard guardrails ─────────────────────────────────────────
-    const upperRec = recommendedSize ? recommendedSize.toUpperCase().trim() : "";
-    const isExtremeSize = ["XXS", "XXXS", "00"].includes(upperRec);
-    let needMoreInfo = needMoreInfoEarly;
-    let needMoreInfoReason = needMoreInfoEarly ? "Brand-specific scale — cannot use universal index mapping without measurements" : "";
-    let needMoreInfoAskFor = needMoreInfoEarly ? getAskForMeasurement(category) : "";
-
-    const matchedKeys = closestResult?.matchedKeys ?? 0;
-    const avgDeviation = closestResult?.bestScore ?? Infinity;
-
-    // Rule 1: confidence < 75 → NEED_MORE_INFO
-    if (!needMoreInfo && confidence.score < 75) {
-      needMoreInfo = true;
-      needMoreInfoAskFor = getAskForMeasurement(category);
-      needMoreInfoReason = matchedKeys < 2
-        ? "Not enough measurement data to make a confident recommendation"
-        : `Measurement deviation too high (${avgDeviation.toFixed(2)}″) for a reliable recommendation`;
-    }
-
-    // Rule 2: never default to extreme/smallest size UNLESS anchor was already extreme
-    const anchorIsExtreme = ["XXS", "XXXS", "00"].includes(anchorSizeLabel0.toUpperCase().trim());
-    if (!needMoreInfo && isExtremeSize && !anchorIsExtreme && confidence.score < 95) {
-      needMoreInfo = true;
-      needMoreInfoAskFor = getAskForMeasurement(category);
-      needMoreInfoReason = `Extreme size (${recommendedSize}) requires very high confidence`;
-      confidence.reasons.push("Blocked extreme size — confidence below 95% and anchor was not extreme");
-    }
-
-    // Rule 3: block MIN or MAX of available sizes when confidence < 85%
-    if (!needMoreInfo && availableSizes.length >= 3 && upperRec) {
-      const upperAvail = availableSizes.map(s => s.toUpperCase().trim());
-      const isMinSize = upperRec === upperAvail[0];
-      const isMaxSize = upperRec === upperAvail[upperAvail.length - 1];
-      if ((isMinSize || isMaxSize) && confidence.score < 85) {
-        needMoreInfo = true;
-        needMoreInfoAskFor = getAskForMeasurement(category);
-        needMoreInfoReason = `Recommended ${isMinSize ? "smallest" : "largest"} available size (${recommendedSize}) — need higher confidence`;
-        confidence.reasons.push(`Blocked edge-of-range size (${isMinSize ? "min" : "max"}) — confidence ${confidence.score}% < 85%`);
-      }
-    }
-
-    // Rule 4: brand_source=fallback + confidence < 85 → NEED_MORE_INFO
-    if (!needMoreInfo && brand_source === "fallback" && confidence.score < 85) {
-      needMoreInfo = true;
-      needMoreInfoAskFor = getAskForMeasurement(category);
-      needMoreInfoReason = "Could not confidently identify the brand on this page";
-      confidence.reasons.push("Brand detection fell back — confidence threshold raised to 85%");
-    }
-
-    // Log low-confidence events
-    if (needMoreInfo || confidence.score < 75) {
-      try {
-        await supabase.from("low_confidence_logs").insert({
-          target_brand: target_brand_key,
-          category,
-          anchor_brand: anchor_brands[0]?.brandKey || "unknown",
-          anchor_size: anchor_brands[0]?.size || "unknown",
-          confidence: confidence.score,
-          coverage: confidence.measurementCoverage,
-          reason: needMoreInfoReason || confidence.reasons.join("; "),
-        });
-      } catch (logErr) {
-        console.error("Failed to log low-confidence event:", logErr);
-      }
-      console.warn(`[LOW_CONFIDENCE] score=${confidence.score} coverage=${matchedKeys} avgDeviation=${avgDeviation.toFixed(2)} brand=${target_brand_key} category=${category} track=${trackUsed}`);
-    }
+    // ── Build match explanation ──────────────────────────────────
+    const matchExplanation = containmentResult?.matchExplanation || (isSameBrand ? "Same brand — direct size match" : "Mapped via size index");
+    const betweenSizes = containmentResult?.betweenSizes || null;
 
     // 5. Scrape product-specific fit info if URL provided
     let productFitSummary: string | null = null;
     if (product_url) {
       productFitSummary = await scrapeProductFit(product_url);
     }
-
-    // Prepare overlap context for bullets
-    const bestDeviations = closestResult?.allScores?.[0]?.deviations || [];
-    const runnerUpEntry = closestResult?.allScores?.[1] || null;
-    const winnerScore = closestResult?.allScores?.[0]?.score;
 
     // 6. Generate AI bullets
     const bullets = await generateBullets({
@@ -1522,18 +1023,12 @@ Deno.serve(async (req) => {
       fitNotes,
       targetFitTendency,
       productFitSummary,
-      deviations: bestDeviations,
-      runnerUp: runnerUpEntry,
-      winnerScore,
+      matchExplanation,
+      betweenSizes,
     });
 
     // 7. Generate comparisons
-    const comparisons = generateComparisons(
-      anchor_brands,
-      targetDisplayName,
-      recommendedSize,
-      targetFitTendency,
-    );
+    const comparisons = generateComparisons(anchor_brands, targetDisplayName, recommendedSize, targetFitTendency);
 
     // 8. Log recommendation if user is authenticated
     let recommendationId: string | null = null;
@@ -1552,7 +1047,7 @@ Deno.serve(async (req) => {
       recommendationId = recData?.id || null;
     }
 
-    // ── Log every run to recommendation_runs ────────────────────
+    // ── Log every run ───────────────────────────────────────────
     try {
       await supabase.from("recommendation_runs").insert({
         user_id: user_id || null,
@@ -1561,147 +1056,69 @@ Deno.serve(async (req) => {
         product_url: product_url || null,
         anchor_brand: anchor_brands[0]?.brandKey || "unknown",
         anchor_size: anchor_brands[0]?.size || "unknown",
-        output_status: needMoreInfo ? "NEED_MORE_INFO" : "OK",
-        recommended_size: needMoreInfo ? null : recommendedSize,
-        confidence: confidence.score,
-        coverage: confidence.measurementCoverage,
+        output_status: recommendedSize ? "OK" : "NO_MATCH",
+        recommended_size: recommendedSize || null,
+        confidence: 0,
+        coverage: 0,
         fallback_used: usedFallback,
-        reason: needMoreInfo ? needMoreInfoReason : null,
-        ask_for: needMoreInfo ? needMoreInfoAskFor : null,
+        reason: !recommendedSize ? matchExplanation : null,
       });
     } catch (auditErr) {
       console.error("Failed to log recommendation run:", auditErr);
     }
 
     // ── Build response ──────────────────────────────────────────
-    const responseBody: Record<string, unknown> = needMoreInfo
-      ? {
-          status: "NEED_MORE_INFO",
-          ask_for: needMoreInfoAskFor,
-          reason: needMoreInfoReason,
-          brandName: targetDisplayName,
-          confidence: {
-            score: confidence.score,
-            reasons: confidence.reasons,
-            matchMethod: confidence.matchMethod,
-          },
-          needMoreInfo: true,
-        }
-      : {
-          size: recommendedSize,
-          brandName: targetDisplayName,
-          sizeScale: targetSizeScale,
-          bullets,
-          comparisons,
-          productFitSummary,
-          recommendation_id: recommendationId,
-          confidence: {
-            score: confidence.score,
-            reasons: confidence.reasons,
-            matchMethod: confidence.matchMethod,
-          },
-          needMoreInfo: false,
-        };
+    const responseBody: Record<string, unknown> = {
+      size: recommendedSize,
+      brandName: targetDisplayName,
+      sizeScale: targetSizeScale,
+      bullets,
+      comparisons,
+      productFitSummary,
+      recommendation_id: recommendationId,
+      needMoreInfo: false,
+      betweenSizes,
+      matchExplanation,
+    };
 
-    // Include debug trace only when requested
+    if (!recommendedSize) {
+      responseBody.size = "";
+      responseBody.needMoreInfo = true;
+      responseBody.reason = matchExplanation;
+      responseBody.ask_for = getMeasurementKeys(category)[0] || "bust";
+    }
+
+    // Debug trace (simplified)
     if (debug_mode) {
       const keys = getMeasurementKeys(category);
-      const anchorRangesDebug: Record<string, { min: number | null; max: number | null; midpoint: number | null }> = {};
-      const anchorMidsDebug: Record<string, number> = {};
-      const missingDimensions: string[] = [];
-
-      if (closestResult) {
-        for (const k of keys) {
-          const r = closestResult.anchorRanges[k];
-          if (r) {
-            anchorMidsDebug[k] = r.midpoint;
-            anchorRangesDebug[k] = { min: r.min, max: r.max, midpoint: r.midpoint };
-          } else {
-            missingDimensions.push(k);
-          }
-        }
-      } else if (anchorMeasurementsUsed) {
-        const norm = normalizeMeasurements(anchorMeasurementsUsed as Record<string, unknown>);
-        for (const k of keys) {
-          if (norm[k]) {
-            anchorMidsDebug[k] = norm[k].midpoint;
-            anchorRangesDebug[k] = { min: norm[k].min, max: norm[k].max, midpoint: norm[k].midpoint };
-          } else {
-            missingDimensions.push(k);
-          }
-        }
-      } else {
-        for (const k of keys) missingDimensions.push(k);
-      }
-
-      const detectionSource: string = product_url ? "url" : "heuristic";
-      const allScores = closestResult?.allScores || [];
-      const top3Candidates = allScores.slice(0, 3);
-
-      const anchorRowChosen = anchorSizingData?.find(
-        (r: { brand_key: string; size_label: string }) =>
-          r.brand_key === anchor_brands[0]?.brandKey &&
-          r.size_label.toUpperCase() === anchorSizeLabel0.toUpperCase()
-      );
-
       responseBody.debug = {
         detectedCategoryRaw,
         normalizedCategory: category,
-        airtableCategoryMatchesCount: targetRowsBeforeFilter,
-        detectionSource,
-        anchorBrand: anchor_brands[0]?.displayName || anchor_brands[0]?.brandKey,
-        anchorSize: anchor_brands[0]?.size,
-        anchorMeasurements: anchorMidsDebug,
-        anchorMeasurementsRaw: anchorRangesDebug,
-        missingDimensions,
-        measurementCoverage: confidence.measurementCoverage,
-        keyDimensionsList: keys,
+        categoryFallbackUsed,
+        anchorBrand: anchor_brands[0]?.displayName || anchorBrandKey0,
+        anchorSize: anchorSizeLabel0,
+        anchorSizeType,
+        anchorScaleTrack,
         targetBrandKey: target_brand_key,
         targetBrandDisplayName: targetDisplayName,
         targetSizeScale,
         availableSizes,
         fitPreference: fit_preference || "true_to_size",
         targetFitTendency,
-        anchorSizeSystem: anchorSizeType,
-        anchorSizeType,
-        anchorScaleTrack: anchorScaleTrack,
-        targetTracksAvailable: targetTracksAvailable,
-        trackUsed: trackUsed,
-        trackSelectionReason: trackSelectionReason,
-        anchorRowChosen: anchorRowChosen
-          ? { sizeLabel: anchorRowChosen.size_label, measurements: anchorRowChosen.measurements }
-          : null,
-        targetSizeTypeSearched,
+        trackUsed,
+        targetTracksAvailable,
         conversionFallbackUsed,
-        sizeSystemFilterUsed: anchorSizeType,
-        targetRowsBeforeSystemFilter: targetRowsBeforeFilter,
-        targetRowsAfterSystemFilter: targetRowsAfterFilter,
-        targetRowsFilteredOut,
-        categoryFallbackUsed,
-        isDenimScale: anchorSizeType === "denim",
+        keyDimensionsList: keys,
         usedFallback,
         usedEstimatedMeasurements: usedEstimated,
-        targetRowUsed: closestResult?.targetRowUsed
-          ? {
-              size_label: closestResult.targetRowUsed.size_label,
-              measurements: closestResult.targetRowUsed.measurements,
-              fit_notes: closestResult.targetRowUsed.fit_notes,
-            }
-          : null,
-        top3Candidates: top3Candidates.map(s => ({
-          ...s,
-          deviations: s.deviations,
-        })),
-        allSizeScores: allScores.map(s => ({
-          size: s.size,
-          score: s.score,
-          matched: s.matched,
-          totalOverlap: s.totalOverlap,
-          deviations: s.deviations,
-        })),
-        comparisonLogic: comparisons.map(c => `${c.brandName} ${c.size} → ${c.fitTag}`),
-        rowQualityThreshold: ROW_QUALITY_THRESHOLD,
-        targetRowsExcludedByQuality: targetRowsExcludedByQuality,
+        matchExplanation,
+        betweenSizes,
+        targetRowUsed: containmentResult?.targetRowUsed ? {
+          size_label: containmentResult.targetRowUsed.size_label,
+          measurements: containmentResult.targetRowUsed.measurements,
+          fit_notes: containmentResult.targetRowUsed.fit_notes,
+        } : null,
+        sizeDetails: containmentResult?.sizeDetails || {},
         targetRowsConsidered: targetSizingData.length,
       };
     }
