@@ -193,12 +193,20 @@ function getMeasurementKeys(category: string): string[] {
   return CATEGORY_MEASUREMENT_KEYS[category] || CATEGORY_MEASUREMENT_KEYS.default;
 }
 
-// ── RANGE CONTAINMENT MODEL ─────────────────────────────────────
+// ── MIDPOINT PROXIMITY MODEL ────────────────────────────────────
+
+interface ProximityCandidate {
+  size: string;
+  row: SizingRow;
+  totalDelta: number;
+  sharedDims: number;
+  dimDeltas: Record<string, { anchorMid: number; targetMid: number; delta: number }>;
+}
 
 interface ContainmentResult {
-  /** The single best size, or null if between/outside */
+  /** The single best size, or null if insufficient data */
   exactMatch: string | null;
-  /** If user is between two sizes */
+  /** If user is between two sizes (two closest within threshold) */
   betweenSizes: [string, string] | null;
   /** Explanation of the match */
   matchExplanation: string;
@@ -208,16 +216,23 @@ interface ContainmentResult {
   targetRowUsed: SizingRow | null;
   /** Fit notes */
   fitNotes: string | null;
+  /** All candidates with their scores for debug */
+  candidates: ProximityCandidate[];
+  /** Anchor midpoints used */
+  anchorMidpoints: Record<string, number>;
+  /** How many shared dimensions the best match had */
+  bestSharedDims: number;
 }
 
 /**
- * Simple range containment: for each target size, check if the user's
- * measurement midpoints fall within the size's min-max range.
- * - If exactly one size contains all measurements → return it.
- * - If user falls between two sizes → return both.
- * - If no match → return null with explanation.
+/**
+ * Midpoint proximity: for each target size, compute its measurement midpoints
+ * and compare against the anchor's midpoints. Pick the size with the smallest
+ * total absolute delta across shared dimensions.
+ *
+ * If fewer than 2 dimensions are shared → return null (needMoreInfo).
  */
-function findContainedSize(
+function findClosestByMidpoint(
   anchorMeasurements: Record<string, unknown> | null,
   targetSizes: SizingRow[],
   category: string,
@@ -225,10 +240,13 @@ function findContainedSize(
   const noMatch: ContainmentResult = {
     exactMatch: null,
     betweenSizes: null,
-    matchExplanation: "Measurement outside this brand's size chart range.",
+    matchExplanation: "Insufficient measurement data for reliable mapping.",
     sizeDetails: {},
     targetRowUsed: null,
     fitNotes: null,
+    candidates: [],
+    anchorMidpoints: {},
+    bestSharedDims: 0,
   };
 
   if (!anchorMeasurements || targetSizes.length === 0) return noMatch;
@@ -236,152 +254,116 @@ function findContainedSize(
   const keys = getMeasurementKeys(category);
   const anchorNorm = normalizeMeasurements(anchorMeasurements as Record<string, unknown>);
 
-  // Get user midpoints for the priority dimensions
-  const userMidpoints: Record<string, number> = {};
+  // Build anchor midpoints — prioritize category-relevant keys, then extras
+  const anchorMidpoints: Record<string, number> = {};
   for (const k of keys) {
-    if (anchorNorm[k]) {
-      userMidpoints[k] = anchorNorm[k].midpoint;
-    }
+    if (anchorNorm[k]) anchorMidpoints[k] = anchorNorm[k].midpoint;
   }
-  // Also pick up any extra dimensions present
   for (const k of Object.keys(anchorNorm)) {
-    if (!userMidpoints[k]) {
-      userMidpoints[k] = anchorNorm[k].midpoint;
-    }
+    if (!anchorMidpoints[k]) anchorMidpoints[k] = anchorNorm[k].midpoint;
   }
 
-  if (Object.keys(userMidpoints).length === 0) return noMatch;
+  if (Object.keys(anchorMidpoints).length === 0) return noMatch;
 
-  // Score each size: count how many dimensions contain the user midpoint
-  const sizeScores: {
-    size: string;
-    row: SizingRow;
-    containedCount: number;
-    checkedCount: number;
-    details: { dimension: string; userMid: number; rangeMin: number; rangeMax: number; contained: boolean }[];
-  }[] = [];
-
+  // Score each target size by total midpoint delta
+  const candidates: ProximityCandidate[] = [];
   const allSizeDetails: Record<string, { dimension: string; userMid: number; rangeMin: number; rangeMax: number; contained: boolean }[]> = {};
 
   for (const row of targetSizes) {
     if (!row.measurements) continue;
     const targetNorm = normalizeMeasurements(row.measurements as Record<string, unknown>);
 
-    let containedCount = 0;
-    let checkedCount = 0;
+    let totalDelta = 0;
+    let sharedDims = 0;
+    const dimDeltas: Record<string, { anchorMid: number; targetMid: number; delta: number }> = {};
     const details: { dimension: string; userMid: number; rangeMin: number; rangeMax: number; contained: boolean }[] = [];
 
-    for (const [k, userMid] of Object.entries(userMidpoints)) {
+    for (const [k, anchorMid] of Object.entries(anchorMidpoints)) {
       const target = targetNorm[k];
       if (!target) continue;
 
-      checkedCount++;
-      const contained = userMid >= target.min && userMid <= target.max;
-      if (contained) containedCount++;
+      sharedDims++;
+      const delta = Math.abs(anchorMid - target.midpoint);
+      totalDelta += delta;
+      dimDeltas[k] = { anchorMid, targetMid: target.midpoint, delta };
 
-      details.push({
-        dimension: k,
-        userMid,
-        rangeMin: target.min,
-        rangeMax: target.max,
-        contained,
-      });
+      const contained = anchorMid >= target.min && anchorMid <= target.max;
+      details.push({ dimension: k, userMid: anchorMid, rangeMin: target.min, rangeMax: target.max, contained });
     }
 
     allSizeDetails[row.size_label] = details;
 
-    if (checkedCount > 0) {
-      sizeScores.push({ size: row.size_label, row, containedCount, checkedCount, details });
+    if (sharedDims > 0) {
+      candidates.push({ size: row.size_label, row, totalDelta, sharedDims, dimDeltas });
     }
   }
 
-  if (sizeScores.length === 0) return { ...noMatch, sizeDetails: allSizeDetails };
+  if (candidates.length === 0) return { ...noMatch, sizeDetails: allSizeDetails, anchorMidpoints };
 
-  // Sort by containedCount descending, then checkedCount descending
-  sizeScores.sort((a, b) => {
-    if (a.containedCount !== b.containedCount) return b.containedCount - a.containedCount;
-    return b.checkedCount - a.checkedCount;
+  // ── MINIMUM 2-DIMENSION GUARD ──────────────────────────────
+  const maxSharedDims = Math.max(...candidates.map(c => c.sharedDims));
+  if (maxSharedDims < 2) {
+    console.log(`[midpoint-proximity] Only ${maxSharedDims} shared dim(s) — need at least 2. Anchor midpoints:`, anchorMidpoints);
+    return {
+      exactMatch: null,
+      betweenSizes: null,
+      matchExplanation: `Only ${maxSharedDims} measurement dimension(s) shared — need at least 2 for reliable mapping.`,
+      sizeDetails: allSizeDetails,
+      targetRowUsed: null,
+      fitNotes: null,
+      candidates,
+      anchorMidpoints,
+      bestSharedDims: maxSharedDims,
+    };
+  }
+
+  // Only consider candidates with at least 2 shared dims
+  const viable = candidates.filter(c => c.sharedDims >= 2);
+
+  // Sort by: most shared dims first, then smallest total delta
+  viable.sort((a, b) => {
+    if (a.sharedDims !== b.sharedDims) return b.sharedDims - a.sharedDims;
+    return a.totalDelta - b.totalDelta;
   });
 
-  const best = sizeScores[0];
+  const best = viable[0];
 
-  // If best has all checked dimensions contained → exact match
-  if (best.containedCount > 0 && best.containedCount === best.checkedCount) {
+  // Debug logging
+  console.log(`[midpoint-proximity] Anchor midpoints:`, anchorMidpoints);
+  console.log(`[midpoint-proximity] Best match: ${best.size} (Δ${best.totalDelta.toFixed(2)}″, ${best.sharedDims} dims)`);
+  for (const c of viable.slice(0, 5)) {
+    console.log(`  candidate ${c.size}: Δ${c.totalDelta.toFixed(2)}″ (${c.sharedDims} dims)`, c.dimDeltas);
+  }
+
+  // Check if there's a very close runner-up (within 1 inch total delta)
+  const runnerUp = viable.length > 1 ? viable[1] : null;
+  const BETWEEN_THRESHOLD = 1.0;
+
+  if (runnerUp && Math.abs(best.totalDelta - runnerUp.totalDelta) < BETWEEN_THRESHOLD) {
     return {
-      exactMatch: best.size,
-      betweenSizes: null,
-      matchExplanation: `Your measurements fall within ${best.size} across ${best.containedCount} dimension(s).`,
+      exactMatch: null,
+      betweenSizes: [best.size, runnerUp.size],
+      matchExplanation: `Measurements fall between ${best.size} (Δ${best.totalDelta.toFixed(1)}″) and ${runnerUp.size} (Δ${runnerUp.totalDelta.toFixed(1)}″) across ${best.sharedDims} dimension(s).`,
       sizeDetails: allSizeDetails,
       targetRowUsed: best.row,
       fitNotes: best.row.fit_notes,
+      candidates: viable,
+      anchorMidpoints,
+      bestSharedDims: best.sharedDims,
     };
   }
 
-  // If best has at least one contained dimension, check if user is "between" this and the next size
-  if (best.containedCount > 0) {
-    // Find a second-best that also has containment on different dimensions
-    const secondBest = sizeScores.find((s, i) => i > 0 && s.containedCount > 0);
-    if (secondBest) {
-      return {
-        exactMatch: null,
-        betweenSizes: [best.size, secondBest.size],
-        matchExplanation: `Your measurements fall between ${best.size} and ${secondBest.size}. Some dimensions fit ${best.size} while others fit ${secondBest.size}.`,
-        sizeDetails: allSizeDetails,
-        targetRowUsed: best.row,
-        fitNotes: best.row.fit_notes,
-      };
-    }
-    // Only one size has partial containment — return it as best guess
-    return {
-      exactMatch: best.size,
-      betweenSizes: null,
-      matchExplanation: `Your measurements partially fall within ${best.size} (${best.containedCount}/${best.checkedCount} dimensions).`,
-      sizeDetails: allSizeDetails,
-      targetRowUsed: best.row,
-      fitNotes: best.row.fit_notes,
-    };
-  }
-
-  // No containment at all — find the two closest sizes by checking proximity
-  // Use the first priority dimension's midpoint to find adjacent sizes
-  const primaryKey = keys.find(k => userMidpoints[k] !== undefined);
-  if (primaryKey) {
-    const userVal = userMidpoints[primaryKey];
-    const withRange = sizeScores
-      .map(s => {
-        const d = s.details.find(dd => dd.dimension === primaryKey);
-        if (!d) return null;
-        const midOfRange = (d.rangeMin + d.rangeMax) / 2;
-        return { ...s, rangeMid: midOfRange, dist: Math.abs(userVal - midOfRange) };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a!.dist - b!.dist) as { size: string; row: SizingRow; rangeMid: number; dist: number; details: typeof sizeScores[0]["details"] }[];
-
-    if (withRange.length >= 2) {
-      const lower = withRange[0];
-      const upper = withRange[1];
-      return {
-        exactMatch: null,
-        betweenSizes: [lower.size, upper.size],
-        matchExplanation: `Your ${primaryKey} measurement (${userVal}″) falls between ${lower.size} and ${upper.size}.`,
-        sizeDetails: allSizeDetails,
-        targetRowUsed: lower.row,
-        fitNotes: lower.row.fit_notes,
-      };
-    }
-    if (withRange.length === 1) {
-      return {
-        exactMatch: withRange[0].size,
-        betweenSizes: null,
-        matchExplanation: `${withRange[0].size} is the closest size based on your ${primaryKey} measurement.`,
-        sizeDetails: allSizeDetails,
-        targetRowUsed: withRange[0].row,
-        fitNotes: withRange[0].row.fit_notes,
-      };
-    }
-  }
-
-  return { ...noMatch, sizeDetails: allSizeDetails };
+  return {
+    exactMatch: best.size,
+    betweenSizes: null,
+    matchExplanation: `${best.size} is the closest match (Δ${best.totalDelta.toFixed(1)}″ across ${best.sharedDims} dimension(s)).`,
+    sizeDetails: allSizeDetails,
+    targetRowUsed: best.row,
+    fitNotes: best.row.fit_notes,
+    candidates: viable,
+    anchorMidpoints,
+    bestSharedDims: best.sharedDims,
+  };
 }
 
 // ── Size scale conversion ───────────────────────────────────────
@@ -1087,7 +1069,7 @@ Deno.serve(async (req) => {
       }
 
       if (anchorMeasurements && targetSizingData.length > 0) {
-        containmentResult = findContainedSize(
+        containmentResult = findClosestByMidpoint(
           anchorMeasurements,
           targetSizingData as SizingRow[],
           category,
@@ -1153,11 +1135,10 @@ Deno.serve(async (req) => {
       const anchorIdx = getUniversalIndex(anchorSizeLabel0, anchorBrandKey0);
       const recIdx = getUniversalIndex(recommendedSize, target_brand_key);
       const MAX_STEP_JUMP = 2;
-      // Determine if containment is "strong" (all checked dims contained, at least 2)
+      // Determine if proximity match is "strong" (exact match with 2+ shared dims)
       const hasStrongContainment = containmentResult?.exactMatch &&
         !usedFallback &&
-        containmentResult.targetRowUsed?.measurements &&
-        Object.keys(normalizeMeasurements(containmentResult.targetRowUsed.measurements as Record<string, unknown>)).length >= 2;
+        (containmentResult.bestSharedDims ?? 0) >= 2;
       if (anchorIdx !== -1 && recIdx !== -1 && Math.abs(recIdx - anchorIdx) > MAX_STEP_JUMP && !hasStrongContainment) {
         // Extreme jump detected with weak data — trigger needMoreInfo
         const askFor = getMeasurementKeys(category)[0] || "bust";
@@ -1327,6 +1308,16 @@ Deno.serve(async (req) => {
         } : null,
         sizeDetails: containmentResult?.sizeDetails || {},
         targetRowsConsidered: targetSizingData.length,
+        proximityModel: {
+          anchorMidpoints: containmentResult?.anchorMidpoints || {},
+          bestSharedDims: containmentResult?.bestSharedDims ?? 0,
+          candidates: (containmentResult?.candidates || []).slice(0, 8).map(c => ({
+            size: c.size,
+            totalDelta: parseFloat(c.totalDelta.toFixed(2)),
+            sharedDims: c.sharedDims,
+            dimDeltas: c.dimDeltas,
+          })),
+        },
       };
     }
 
