@@ -49,6 +49,7 @@ export function useVirtualTryOn() {
     garmentImageBase64: string | null,
     category?: string,
     garmentImageUrl?: string,
+    extractionMethod?: string,
   ) => {
     cleanup();
     setState({ status: "starting", outputImageUrl: null, error: null, predictionId: null });
@@ -56,16 +57,20 @@ export function useVirtualTryOn() {
     console.log("[VTO] Starting prediction", {
       garmentImageBase64Length: garmentImageBase64?.length ?? 0,
       garmentImageApproxKB: garmentImageBase64 ? Math.round(garmentImageBase64.length * 0.75 / 1024) : 0,
-      garmentImageUrl: garmentImageUrl ?? null,
+      garmentImageUrl: garmentImageUrl ?? "none",
       personImageBase64Length: personImageBase64.length,
       personImageApproxKB: Math.round(personImageBase64.length * 0.75 / 1024),
-      category,
+      category: category ?? "unknown",
+      extractionMethod: extractionMethod ?? "unknown",
     });
 
     try {
       const requestBody: Record<string, unknown> = {
         person_image_base64: personImageBase64,
-        category,
+        category: category ?? "unknown",
+        extractionMethod: extractionMethod ?? "unknown",
+        garmentType: "unknown",
+        debug: true,
       };
       if (garmentImageBase64) {
         requestBody.garment_image_base64 = garmentImageBase64;

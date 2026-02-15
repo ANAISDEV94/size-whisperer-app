@@ -67,7 +67,7 @@ const ExtensionPanel = () => {
   // ── Garment base64 + source URL from content script postMessage ──
   const [garmentImageBase64, setGarmentImageBase64] = useState<string | null>(null);
   const [garmentSourceUrl, setGarmentSourceUrl] = useState<string | null>(null);
-  const [garmentExtractionMethod, setGarmentExtractionMethod] = useState<string | undefined>(undefined);
+  const [garmentExtractionMethod, setGarmentExtractionMethod] = useState<string>("unknown");
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -82,7 +82,7 @@ const ExtensionPanel = () => {
         });
         setGarmentImageBase64(event.data.garmentImageBase64 || null);
         setGarmentSourceUrl(event.data.sourceUrl || null);
-        setGarmentExtractionMethod(event.data.extractionMethod);
+        setGarmentExtractionMethod(event.data.extractionMethod || "unknown");
       }
     };
     window.addEventListener("message", handler);
