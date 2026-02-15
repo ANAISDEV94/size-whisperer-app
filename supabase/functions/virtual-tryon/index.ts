@@ -11,6 +11,42 @@ function mapCategory(cat?: string): string {
   return "upper_body";
 }
 
+// Fetch a remote image and return it as a base64 data URI
+async function fetchImageAsDataUri(imageUrl: string): Promise<string> {
+  const res = await fetch(imageUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch garment image: ${res.status} ${res.statusText}`);
+  }
+
+  const buf = await res.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+
+  if (bytes.length > 5 * 1024 * 1024) {
+    throw new Error("Garment image too large (max 5MB)");
+  }
+
+  // Detect content type
+  const ct = res.headers.get("content-type") || "";
+  const mime = ct.startsWith("image/") ? ct.split(";")[0] : "image/jpeg";
+
+  // Convert to base64
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -41,11 +77,10 @@ Deno.serve(async (req) => {
       });
       const data = await res.json();
 
-      const status = data.status; // starting | processing | succeeded | failed | canceled
+      const status = data.status;
       const result: Record<string, unknown> = { prediction_id: predictionId, status };
 
       if (status === "succeeded") {
-        // IDM-VTON outputs a single image URL
         const output = data.output;
         result.output_image_url = Array.isArray(output) ? output[0] : output;
       } else if (status === "failed" || status === "canceled") {
@@ -69,7 +104,7 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Validate base64 size (~5MB limit)
+      // Validate person image size (~5MB limit)
       const sizeBytes = (person_image_base64.length * 3) / 4;
       if (sizeBytes > 5 * 1024 * 1024) {
         return new Response(JSON.stringify({ error: "Image too large. Max 5MB." }), {
@@ -78,13 +113,28 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Ensure base64 has data URI prefix
+      // Ensure person image has data URI prefix
       const personImg = person_image_base64.startsWith("data:")
         ? person_image_base64
         : `data:image/jpeg;base64,${person_image_base64}`;
 
+      // Proxy garment image: fetch server-side and convert to base64
+      let garmentImg: string;
+      try {
+        console.log("[virtual-tryon] Fetching garment image:", garment_image_url);
+        garmentImg = await fetchImageAsDataUri(garment_image_url);
+        console.log("[virtual-tryon] Garment image proxied successfully, length:", garmentImg.length);
+      } catch (err) {
+        console.error("[virtual-tryon] Garment fetch error:", err);
+        return new Response(JSON.stringify({ error: "Could not load garment image. The retailer may be blocking access." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       const vtonCategory = mapCategory(category);
 
+      // Use model-based API (more resilient than version hash)
       const res = await fetch(REPLICATE_API_URL, {
         method: "POST",
         headers: {
@@ -92,10 +142,10 @@ Deno.serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          version: "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
+          model: "cuuupid/idm-vton",
           input: {
             human_img: personImg,
-            garm_img: garment_image_url,
+            garm_img: garmentImg,
             category: vtonCategory,
           },
         }),
