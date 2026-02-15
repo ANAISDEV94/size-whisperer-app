@@ -10,6 +10,7 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 interface VTOScreenProps {
   garmentImageUrl: string | null;
   garmentImageBase64: string | null;
+  garmentImageSourceUrl?: string | null;
   extractionMethod?: string;
   category?: string;
   onBack: () => void;
@@ -24,7 +25,7 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-const VTOScreen = ({ garmentImageUrl, garmentImageBase64, extractionMethod, category, onBack }: VTOScreenProps) => {
+const VTOScreen = ({ garmentImageUrl, garmentImageBase64, garmentImageSourceUrl, extractionMethod, category, onBack }: VTOScreenProps) => {
   const [personPhoto, setPersonPhoto] = useState<string | null>(() => {
     try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
   });
@@ -37,9 +38,12 @@ const VTOScreen = ({ garmentImageUrl, garmentImageBase64, extractionMethod, cate
 
   // The base64 to send to backend: manual upload > auto-captured > null
   const effectiveGarmentBase64 = manualGarmentBase64 || garmentImageBase64 || null;
+  // The source URL to send as fallback when no base64 is available
+  const effectiveGarmentUrl = garmentImageSourceUrl || garmentImageUrl || null;
   // For preview: base64 if available, fall back to URL
-  const garmentPreviewSrc = effectiveGarmentBase64 || garmentImageUrl || null;
-  const canGenerate = !!personPhoto && !!effectiveGarmentBase64 && status === "idle";
+  const garmentPreviewSrc = effectiveGarmentBase64 || effectiveGarmentUrl || null;
+  // Can generate if we have person photo AND either base64 or URL
+  const canGenerate = !!personPhoto && (!!effectiveGarmentBase64 || !!effectiveGarmentUrl) && status === "idle";
 
   // Persist photo in localStorage
   useEffect(() => {
@@ -80,8 +84,8 @@ const VTOScreen = ({ garmentImageUrl, garmentImageBase64, extractionMethod, cate
   };
 
   const handleGenerate = () => {
-    if (!personPhoto || !effectiveGarmentBase64) return;
-    startPrediction(personPhoto, effectiveGarmentBase64, category);
+    if (!personPhoto || (!effectiveGarmentBase64 && !effectiveGarmentUrl)) return;
+    startPrediction(personPhoto, effectiveGarmentBase64, category, effectiveGarmentUrl || undefined);
   };
 
   const handleTryAgain = () => {
@@ -250,7 +254,7 @@ const VTOScreen = ({ garmentImageUrl, garmentImageBase64, extractionMethod, cate
         >
           {effectiveGarmentBase64 ? "Upload different garment" : "Select garment image manually"}
         </button>
-        {!effectiveGarmentBase64 && garmentImageUrl && (
+        {!effectiveGarmentBase64 && !effectiveGarmentUrl && garmentImageUrl && (
           <p className="text-[9px] text-muted-foreground mt-1">
             Auto-capture failed. Please upload the garment image manually.
           </p>
@@ -267,7 +271,7 @@ const VTOScreen = ({ garmentImageUrl, garmentImageBase64, extractionMethod, cate
         Generate Try-On
       </Button>
 
-      {!effectiveGarmentBase64 && (
+      {!effectiveGarmentBase64 && !effectiveGarmentUrl && (
         <p className="text-[9px] text-center text-muted-foreground mb-2">
           A garment image is required to generate the try-on.
         </p>
