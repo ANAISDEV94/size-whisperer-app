@@ -48,7 +48,7 @@ The frontend already correctly sends base64 and polls for results. The garment a
 ### 4. UX: Garment Auto-Capture is Primary Path
 
 The current flow already auto-captures the garment from the PDP via the content script. The manual upload button appears only as a small "Select garment image manually" link below the auto-captured preview -- it is NOT the primary path. No UX changes needed here; the auto-capture is working (the screenshot shows the garment was captured successfully at ~99KB).  
-I uple goaded tharment image but the image should load on its own or take a screenshot of the garment image.
+I uploaded the garment image but the image should load on its own or take a screenshot of the garment image.
 
 ## Technical Details
 
@@ -92,4 +92,3 @@ Replicate:
 
 
 No frontend, hook, or extension changes needed.  
-  
