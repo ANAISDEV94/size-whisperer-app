@@ -28,6 +28,7 @@ const VTOScreen = ({ garmentImageUrl, category, onBack }: VTOScreenProps) => {
     try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
   });
   const [manualGarmentUrl, setManualGarmentUrl] = useState("");
+  const [garmentPreviewError, setGarmentPreviewError] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const { status, outputImageUrl, error, startPrediction, cancel, reset } = useVirtualTryOn();
 
@@ -177,7 +178,21 @@ const VTOScreen = ({ garmentImageUrl, category, onBack }: VTOScreenProps) => {
         <p className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-2">Garment image</p>
         {effectiveGarmentUrl ? (
           <div className="w-full rounded-xl overflow-hidden border border-border bg-secondary">
-            <img src={effectiveGarmentUrl} alt="Product garment" className="w-full h-40 object-contain bg-white" />
+            {garmentPreviewError ? (
+              <div className="w-full h-40 flex items-center justify-center bg-secondary">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <ImageIcon className="w-4 h-4" />
+                  <span className="text-xs">Image detected — preview unavailable</span>
+                </div>
+              </div>
+            ) : (
+              <img
+                src={effectiveGarmentUrl}
+                alt="Product garment"
+                className="w-full h-40 object-contain bg-white"
+                onError={() => setGarmentPreviewError(true)}
+              />
+            )}
           </div>
         ) : (
           <div className="space-y-2">
