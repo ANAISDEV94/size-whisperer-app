@@ -1,94 +1,91 @@
-# Fix VTO: Use Supabase Storage for Temporary Image Hosting
+
+
+# Fix VTO: Server-Side Garment Image Fetching (Eliminate Manual Upload Requirement)
 
 ## Problem
 
-Replicate's Files API returns authenticated URLs (`https://api.replicate.com/v1/files/{id}`) that the model worker cannot download. The model receives `None` for both image inputs and crashes with the Python error shown in the UI.
+The content script successfully finds the garment image URL (via og:image, JSON-LD, etc.), but the client-side base64 canvas capture fails due to browser CORS restrictions on cross-origin CDN images (e.g., Shopify CDN at cdn.shopify.com). When base64 is null, the VTO screen shows "No garment image detected" and the only option is manual upload -- bad UX.
 
 ## Solution
 
-Upload both images to a **public Supabase Storage bucket** (`vto-temp`) instead. This gives Replicate plain HTTP URLs it can download without authentication.
+Pass the garment image **URL** to the edge function as a fallback. The edge function fetches the image server-side (no CORS), uploads it to Supabase Storage, and passes the public URL to Replicate. Manual upload remains as a last-resort fallback but is no longer the primary path when auto-capture fails.
 
 ## Changes
 
-### 1. Create Storage Bucket
+### 1. Content Script (`extension/content.js`)
 
-Create a public `vto-temp` storage bucket via SQL migration. Files will be cleaned up after use.
+Always send the garment image source URL in the postMessage, even when base64 capture fails. Currently it sends `sourceUrl` but the panel doesn't use it for VTO. No major changes needed here -- `sourceUrl` is already sent.
 
-```sql
-INSERT INTO storage.buckets (id, name, public) VALUES ('vto-temp', 'vto-temp', true);
-CREATE POLICY "Allow anon uploads to vto-temp" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'vto-temp');
-CREATE POLICY "Allow public reads from vto-temp" ON storage.objects FOR SELECT USING (bucket_id = 'vto-temp');
-CREATE POLICY "Allow deletes from vto-temp" ON storage.objects FOR DELETE USING (bucket_id = 'vto-temp');
+### 2. ExtensionPanel (`src/components/panel/ExtensionPanel.tsx`)
+
+- Store the `sourceUrl` from the postMessage in state (alongside `garmentImageBase64`)
+- Pass it to VTOScreen as a new `garmentImageSourceUrl` prop
+
+### 3. VTOScreen (`src/components/panel/screens/VTOScreen.tsx`)
+
+- Accept `garmentImageSourceUrl` prop
+- When sending to the edge function: if base64 is available, send it as before; if only URL is available, send `garment_image_url` instead
+- Show the garment image preview using the URL when base64 isn't available (for preview only -- the URL may work in an img tag even if canvas capture failed)
+- Remove the prominent "No garment image detected" state when a URL is available
+
+### 4. useVirtualTryOn Hook (`src/hooks/useVirtualTryOn.ts`)
+
+- Update `startPrediction` to accept an optional `garmentImageUrl` parameter
+- Send `garment_image_url` in the POST body when base64 isn't available
+
+### 5. Edge Function (`supabase/functions/virtual-tryon/index.ts`)
+
+- Accept `garment_image_url` as an alternative to `garment_image_base64`
+- When URL is provided: fetch the image server-side, convert to binary, upload to Supabase Storage, get public URL
+- The person image continues to use base64 (user uploads it directly, so no CORS issue)
+- Add a new helper `fetchImageFromUrl(url)` that downloads the image and returns binary data
+
+## Flow After Fix
+
+```text
+Content script:
+  1. Extract garment URL (og:image, JSON-LD, etc.) -- almost always succeeds
+  2. Attempt base64 capture via canvas -- may fail due to CORS
+  3. Send postMessage with { garmentImageBase64, sourceUrl, extractionMethod }
+
+Panel (VTOScreen):
+  - Has base64? Send garment_image_base64 to edge function (existing path)
+  - No base64 but has URL? Send garment_image_url to edge function (new path)
+  - Neither? Show manual upload fallback (rare edge case)
+
+Edge function:
+  - garment_image_base64 provided? Decode + upload to storage (existing path)
+  - garment_image_url provided? Fetch server-side + upload to storage (new path)
+  - Pass public storage URL to Replicate as garm_img
 ```
-
-### 2. Edge Function (`supabase/functions/virtual-tryon/index.ts`)
-
-Replace `uploadToReplicateFiles()` with `uploadToSupabaseStorage()`:
-
-- Decode base64 to binary
-- Upload to `vto-temp` bucket with a UUID filename using the Supabase client
-- Construct the public URL: `{SUPABASE_URL}/storage/v1/object/public/vto-temp/{filename}`
-- Pass these public URLs to Replicate as `human_img` and `garm_img`
-- After the prediction is created, optionally schedule cleanup (or let files expire)
-
-The key change in the prediction creation:
-
-```
-input: {
-  human_img: publicPersonUrl,   // https://{project}.supabase.co/storage/v1/object/public/vto-temp/{uuid}.png
-  garm_img: publicGarmentUrl,   // https://{project}.supabase.co/storage/v1/object/public/vto-temp/{uuid}.png
-  category: vtonCategory,
-}
-```
-
-### 3. No Frontend Changes
-
-The frontend already correctly sends base64 and polls for results. The garment auto-capture via content script + postMessage pipeline remains unchanged.
-
-### 4. UX: Garment Auto-Capture is Primary Path
-
-The current flow already auto-captures the garment from the PDP via the content script. The manual upload button appears only as a small "Select garment image manually" link below the auto-captured preview -- it is NOT the primary path. No UX changes needed here; the auto-capture is working (the screenshot shows the garment was captured successfully at ~99KB).  
-I uploaded the garment image but the image should load on its own or take a screenshot of the garment image.
 
 ## Technical Details
 
-### Upload helper
+### Edge function: new URL fetch helper
 
 ```text
-async function uploadToSupabaseStorage(base64DataUri, filename):
-  1. Extract MIME type and raw base64 from data URI
-  2. Decode base64 to Uint8Array
-  3. Create Supabase admin client (using service role key available in edge functions)
-  4. Upload binary to vto-temp/{filename}
-  5. Return public URL: {SUPABASE_URL}/storage/v1/object/public/vto-temp/{filename}
+async function fetchAndUploadFromUrl(imageUrl, supabaseUrl, supabase):
+  1. Fetch imageUrl with standard headers (User-Agent, Accept)
+  2. Get response as ArrayBuffer
+  3. Detect content type from response headers
+  4. Generate UUID filename
+  5. Upload to vto-temp bucket
+  6. Return public URL
 ```
 
-### Updated flow
+### VTOScreen garment preview improvement
 
-```text
-Client POST (unchanged):
-  person_image_base64: "data:image/png;base64,..."
-  garment_image_base64: "data:image/png;base64,..."
-
-Edge Function:
-  1. Validate both base64 images (existing logic, unchanged)
-  2. Upload person to Supabase Storage -> public URL
-  3. Upload garment to Supabase Storage -> public URL
-  4. Create Replicate prediction with public URLs
-  5. Return prediction_id
-
-Replicate:
-  - Downloads images from public Supabase Storage URLs (no auth needed)
-  - Processes normally
-```
+When base64 capture failed but URL exists:
+- Show the garment image using the URL directly in an `<img>` tag (browser img tags handle cross-origin fine, unlike canvas)
+- The preview will work normally; the "No garment image detected" message only shows when there's truly no image at all
 
 ## Files Changed
 
+| File | Change |
+|------|--------|
+| `src/components/panel/ExtensionPanel.tsx` | Store garment source URL from postMessage, pass to VTOScreen |
+| `src/components/panel/screens/VTOScreen.tsx` | Accept URL prop, use it as fallback for both preview and generation |
+| `src/hooks/useVirtualTryOn.ts` | Accept optional garment URL parameter, send in request body |
+| `supabase/functions/virtual-tryon/index.ts` | Accept `garment_image_url`, fetch server-side, upload to storage |
 
-| File                                        | Change                                                                                      |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| SQL Migration                               | Create `vto-temp` public storage bucket with upload/read/delete policies                    |
-| `supabase/functions/virtual-tryon/index.ts` | Replace `uploadToReplicateFiles` with `uploadToSupabaseStorage` using Supabase admin client |
-
-
-No frontend, hook, or extension changes needed.  
+No changes needed to `extension/content.js` -- it already sends `sourceUrl` in the postMessage.
