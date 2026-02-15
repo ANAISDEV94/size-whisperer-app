@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback } from "react";
-import { supabase } from "@/integrations/supabase/client";
 
 type VTOStatus = "idle" | "starting" | "processing" | "succeeded" | "failed" | "timeout";
 
@@ -12,6 +11,15 @@ interface VTOState {
 
 const POLL_INTERVAL = 3000;
 const MAX_POLLS = 40; // 120 seconds max
+
+const BASE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/virtual-tryon`;
+const API_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+const headers = {
+  "Content-Type": "application/json",
+  "Authorization": `Bearer ${API_KEY}`,
+  "apikey": API_KEY,
+};
 
 export function useVirtualTryOn() {
   const [state, setState] = useState<VTOState>({
@@ -44,18 +52,34 @@ export function useVirtualTryOn() {
     cleanup();
     setState({ status: "starting", outputImageUrl: null, error: null, predictionId: null });
 
+    console.log("[VTO] Starting prediction", {
+      garmentImageUrl,
+      personImageBase64Length: personImageBase64.length,
+      personImageApproxKB: Math.round(personImageBase64.length * 0.75 / 1024),
+      category,
+    });
+
     try {
-      const { data, error } = await supabase.functions.invoke("virtual-tryon", {
+      const res = await fetch(BASE_URL, {
         method: "POST",
-        body: { person_image_base64: personImageBase64, garment_image_url: garmentImageUrl, category },
+        headers,
+        body: JSON.stringify({ person_image_base64: personImageBase64, garment_image_url: garmentImageUrl, category }),
       });
 
-      if (error || !data?.prediction_id) {
-        setState({ status: "failed", outputImageUrl: null, error: data?.error || error?.message || "Failed to start", predictionId: null });
+      const body = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        const detail = body.error || body.detail || JSON.stringify(body);
+        setState({ status: "failed", outputImageUrl: null, error: `[${res.status}] ${detail}`, predictionId: null });
         return;
       }
 
-      const predictionId = data.prediction_id;
+      if (!body.prediction_id) {
+        setState({ status: "failed", outputImageUrl: null, error: body.error || "No prediction_id returned", predictionId: null });
+        return;
+      }
+
+      const predictionId = body.prediction_id;
       setState(s => ({ ...s, status: "processing", predictionId }));
 
       // Start polling
@@ -69,13 +93,15 @@ export function useVirtualTryOn() {
         }
 
         try {
-          // Use GET with query params via invoke
-          const { data: pollData } = await supabase.functions.invoke(
-            `virtual-tryon?prediction_id=${predictionId}`,
-            { method: "GET" },
-          );
+          const pollRes = await fetch(`${BASE_URL}?prediction_id=${predictionId}`, { method: "GET", headers });
+          const pollData = await pollRes.json().catch(() => ({}));
 
-          if (!pollData) return;
+          if (!pollRes.ok) {
+            const detail = pollData.error || pollData.detail || JSON.stringify(pollData);
+            cleanup();
+            setState(s => ({ ...s, status: "failed", error: `[${pollRes.status}] ${detail}` }));
+            return;
+          }
 
           if (pollData.status === "succeeded") {
             cleanup();
@@ -84,7 +110,6 @@ export function useVirtualTryOn() {
             cleanup();
             setState({ status: "failed", outputImageUrl: null, error: pollData.error || "Something went wrong. Please try again.", predictionId });
           }
-          // else still processing, keep polling
         } catch {
           // Network error during poll — keep trying
         }

@@ -139,7 +139,7 @@ const VTOScreen = ({ garmentImageUrl, category, onBack }: VTOScreenProps) => {
       {/* Error banner */}
       {(status === "failed" || status === "timeout") && error && (
         <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 mb-4">
-          <p className="text-xs text-destructive">{error}</p>
+          <p className="text-xs text-destructive whitespace-pre-wrap">{error}</p>
         </div>
       )}
 
