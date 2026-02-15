@@ -303,6 +303,48 @@ function isProductPage() {
   return segments.length >= 2;
 }
 
+// ── Garment image extraction ────────────────────────────────────
+function extractGarmentImage() {
+  // 1. og:image
+  const ogImg = document.querySelector('meta[property="og:image"]');
+  if (ogImg) {
+    const url = ogImg.getAttribute("content");
+    if (url) { log("Garment image from og:image:", url); return url; }
+  }
+  // 2. product:image or itemprop image
+  const productImg = document.querySelector('meta[property="product:image"]') || document.querySelector('[itemprop="image"]');
+  if (productImg) {
+    const url = productImg.getAttribute("content") || productImg.getAttribute("src");
+    if (url) { log("Garment image from itemprop/product:image:", url); return url; }
+  }
+  // 3. JSON-LD Product image
+  try {
+    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+    for (const script of scripts) {
+      const json = JSON.parse(script.textContent);
+      const img = json?.image;
+      if (img) {
+        const url = Array.isArray(img) ? img[0] : (typeof img === "string" ? img : img?.url);
+        if (url) { log("Garment image from JSON-LD:", url); return url; }
+      }
+    }
+  } catch { /* ignore */ }
+  // 4. Largest gallery image
+  const imgs = document.querySelectorAll("img");
+  let best = null;
+  let bestArea = 0;
+  for (const img of imgs) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (w < 200 || h < 200) continue;
+    const area = w * h;
+    if (area > bestArea) { bestArea = area; best = img; }
+  }
+  if (best) { log("Garment image from largest img:", best.src); return best.src; }
+  log("No garment image found");
+  return null;
+}
+
 function injectPanel(brandKey, brandSource) {
   // Prevent duplicate injection
   if (document.getElementById("altaana-root")) {
@@ -317,6 +359,10 @@ function injectPanel(brandKey, brandSource) {
   let iframeSrc = `${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}&source=extension`;
   if (brandSource) {
     iframeSrc += `&brand_source=${brandSource}`;
+  }
+  const garmentImg = extractGarmentImage();
+  if (garmentImg) {
+    iframeSrc += `&garment_image=${encodeURIComponent(garmentImg)}`;
   }
 
   // ── 1. Root container ──────────────────────────────────────────

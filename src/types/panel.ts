@@ -4,7 +4,8 @@ export type PanelState =
   | 'profile'
   | 'analyzing'
   | 'recommendation'
-  | 'confirmed';
+  | 'confirmed'
+  | 'vto';
 
 export type FitPreference = 'fitted' | 'true_to_size' | 'relaxed';
 
