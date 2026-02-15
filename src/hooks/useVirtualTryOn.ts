@@ -46,14 +46,15 @@ export function useVirtualTryOn() {
 
   const startPrediction = useCallback(async (
     personImageBase64: string,
-    garmentImageUrl: string,
+    garmentImageBase64: string,
     category?: string,
   ) => {
     cleanup();
     setState({ status: "starting", outputImageUrl: null, error: null, predictionId: null });
 
     console.log("[VTO] Starting prediction", {
-      garmentImageUrl,
+      garmentImageBase64Length: garmentImageBase64.length,
+      garmentImageApproxKB: Math.round(garmentImageBase64.length * 0.75 / 1024),
       personImageBase64Length: personImageBase64.length,
       personImageApproxKB: Math.round(personImageBase64.length * 0.75 / 1024),
       category,
@@ -63,7 +64,11 @@ export function useVirtualTryOn() {
       const res = await fetch(BASE_URL, {
         method: "POST",
         headers,
-        body: JSON.stringify({ person_image_base64: personImageBase64, garment_image_url: garmentImageUrl, category }),
+        body: JSON.stringify({
+          person_image_base64: personImageBase64,
+          garment_image_base64: garmentImageBase64,
+          category,
+        }),
       });
 
       const body = await res.json().catch(() => ({}));

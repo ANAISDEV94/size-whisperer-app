@@ -3,6 +3,7 @@
  *
  * Detects the current brand from the page domain, infers a garment category
  * from the URL path, and injects the hosted panel UI inside an iframe.
+ * Captures garment images client-side as base64 PNG via canvas.
  */
 
 // ── Debug flag – set to false to silence all [Altaana] console logs ──
@@ -69,7 +70,6 @@ const REVOLVE_PATH_BRANDS = {
 };
 
 // ── Display name → brandKey normalization ─────────────────────────
-// Handles &, +, punctuation, accented chars
 function slugifyBrandName(name) {
   return name
     .toLowerCase()
@@ -83,20 +83,16 @@ function slugifyBrandName(name) {
 
 // ── Revolve-specific DOM brand selectors (ordered by reliability) ─
 const REVOLVE_BRAND_SELECTORS = [
-  // Structured data (most reliable)
   '[itemprop="brand"] [itemprop="name"]',
   'meta[itemprop="brand"]',
-  // Revolve-specific PDP selectors
   '.product-details .brand-name a',
   '.product-details .product-brand a',
   '.product-brand__link',
   'a[href*="/r/br/"]',
   'a[href*="/br/"]',
-  // JSON-LD fallback handled separately
 ];
 
 // ── Normalized category enum ──────────────────────────────────────
-// Valid categories: tops, bottoms, dresses, denim, swim, outerwear
 const CATEGORY_KEYWORDS = {
   denim: ["jean", "denim", "selvage", "selvedge", "rigid-denim", "raw-denim"],
   swim: ["swim", "bikini", "one-piece", "swimsuit", "swimwear"],
@@ -106,7 +102,6 @@ const CATEGORY_KEYWORDS = {
   tops: ["top", "blouse", "shirt", "tee", "tank", "cami", "bodysuit", "sweater", "hoodie", "pullover", "cardigan", "crop-top", "bra", "sports-bra"],
 };
 
-// Keywords to scan in DOM text for category signals
 const DOM_CATEGORY_SIGNALS = {
   denim: ["denim", "jeans", "jean", "selvage", "selvedge", "raw denim", "stretch denim", "rigid denim"],
   swim: ["swimwear", "bikini", "swim", "one-piece", "swimsuit", "coverup"],
@@ -116,13 +111,12 @@ const DOM_CATEGORY_SIGNALS = {
   tops: ["top", "blouse", "shirt", "tee", "tank", "cami", "bodysuit", "sweater", "hoodie", "cardigan", "sports bra", "bralette"],
 };
 
-// ── Widget dimensions (must match FloatingWidget.tsx) ─────────────
+// ── Widget dimensions ─────────────────────────────────────────────
 const WIDGET_WIDTH = 180;
 const WIDGET_HEIGHT = 41;
 const PANEL_IFRAME_WIDTH = 440;
 
 function detectBrandFromDOM() {
-  // Strategy 1: Try Revolve-specific selectors first (on Revolve)
   const isRevolve = location.hostname.replace(/^www\./, "").includes("revolve.com");
   const selectors = isRevolve ? REVOLVE_BRAND_SELECTORS : [
     '.product-details .brand-name a',
@@ -160,7 +154,6 @@ function detectBrandFromDOM() {
     }
   }
 
-  // Strategy 2: JSON-LD structured data
   if (isRevolve) {
     try {
       const scripts = document.querySelectorAll('script[type="application/ld+json"]');
@@ -181,7 +174,6 @@ function detectBrandFromDOM() {
   return null;
 }
 
-// Returns { brandKey, brandSource } where brandSource is "domain"|"path"|"dom"|"url_segment"|"fallback"
 function detectBrand() {
   const hostname = location.hostname.replace(/^www\./, "");
 
@@ -198,7 +190,6 @@ function detectBrand() {
   if (hostname.includes("revolve.com")) {
     const path = location.pathname.toLowerCase();
 
-    // 1. Known path prefix mapping
     for (const [prefix, brandKey] of Object.entries(REVOLVE_PATH_BRANDS)) {
       if (path.includes(prefix)) {
         log("Revolve brand from path prefix:", prefix, "→", brandKey);
@@ -206,7 +197,6 @@ function detectBrand() {
       }
     }
 
-    // 2. DOM-based detection (selectors + JSON-LD)
     const domBrand = detectBrandFromDOM();
     if (domBrand) {
       const slug = slugifyBrandName(domBrand);
@@ -214,7 +204,6 @@ function detectBrand() {
       return { brandKey: slug, brandSource: "dom" };
     }
 
-    // 3. URL first-segment heuristic
     const brandMatch = path.match(/^\/([a-z0-9-]+)\//);
     if (brandMatch) {
       const segment = brandMatch[1];
@@ -226,7 +215,6 @@ function detectBrand() {
       }
     }
 
-    // 4. Fallback — can't determine brand
     log("Revolve brand detection failed, using fallback");
     return { brandKey: "revolve", brandSource: "fallback" };
   }
@@ -235,7 +223,6 @@ function detectBrand() {
 }
 
 function inferCategory() {
-  // 1. URL path keywords (highest priority — most reliable)
   const path = location.pathname.toLowerCase();
   for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
     for (const kw of keywords) {
@@ -246,7 +233,6 @@ function inferCategory() {
     }
   }
 
-  // 2. Breadcrumb / category nav text
   const breadcrumbSelectors = [
     'nav[aria-label="breadcrumb"]',
     '.breadcrumb', '.breadcrumbs',
@@ -269,7 +255,6 @@ function inferCategory() {
     }
   }
 
-  // 3. Product details / description text
   const detailSelectors = [
     '.product-details', '.product-description',
     '[class*="product-info"]', '[class*="pdp-"]',
@@ -303,7 +288,7 @@ function isProductPage() {
   return segments.length >= 2;
 }
 
-// ── Garment image extraction ────────────────────────────────────
+// ── Garment image extraction (returns URL) ──────────────────────
 function extractGarmentImage() {
   // 1. og:image
   const ogImg = document.querySelector('meta[property="og:image"]');
@@ -345,8 +330,62 @@ function extractGarmentImage() {
   return null;
 }
 
+// ── Capture image as PNG base64 via canvas ──────────────────────
+async function captureImageAsBase64(imgUrl) {
+  if (!imgUrl) return { base64: null, method: "failed" };
+
+  // Resolve to absolute URL
+  const absoluteUrl = new URL(imgUrl, location.href).href;
+  log("captureImageAsBase64: attempting", absoluteUrl);
+
+  // Strategy 1: Find matching DOM <img> and draw to canvas
+  try {
+    const imgs = document.querySelectorAll("img");
+    for (const img of imgs) {
+      if (img.src === absoluteUrl || img.currentSrc === absoluteUrl ||
+          img.src === imgUrl || img.currentSrc === imgUrl) {
+        // Found matching element — try drawing to canvas
+        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          // toDataURL will throw if canvas is tainted (cross-origin)
+          const dataUrl = canvas.toDataURL("image/png");
+          log("captureImageAsBase64: DOM canvas success, length:", dataUrl.length);
+          return { base64: dataUrl, method: "dom_canvas" };
+        }
+      }
+    }
+    log("captureImageAsBase64: no matching DOM img found or not loaded");
+  } catch (e) {
+    log("captureImageAsBase64: DOM canvas failed (likely tainted):", e.message);
+  }
+
+  // Strategy 2: fetch as blob → ImageBitmap → canvas
+  try {
+    const res = await fetch(absoluteUrl);
+    if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+    const blob = await res.blob();
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0);
+    const dataUrl = canvas.toDataURL("image/png");
+    log("captureImageAsBase64: fetch+canvas success, length:", dataUrl.length);
+    return { base64: dataUrl, method: "fetch_canvas" };
+  } catch (e) {
+    log("captureImageAsBase64: fetch+canvas failed:", e.message);
+  }
+
+  log("captureImageAsBase64: all methods failed");
+  return { base64: null, method: "failed" };
+}
+
 function injectPanel(brandKey, brandSource) {
-  // Prevent duplicate injection
   if (document.getElementById("altaana-root")) {
     log("Root already exists, skipping injection");
     return;
@@ -356,14 +395,14 @@ function injectPanel(brandKey, brandSource) {
   log("Detected category:", category);
 
   const productUrl = encodeURIComponent(location.href);
+  // NOTE: garment_image is NO LONGER passed as URL param — sent via postMessage instead
   let iframeSrc = `${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}&source=extension`;
   if (brandSource) {
     iframeSrc += `&brand_source=${brandSource}`;
   }
-  const garmentImg = extractGarmentImage();
-  if (garmentImg) {
-    iframeSrc += `&garment_image=${encodeURIComponent(garmentImg)}`;
-  }
+
+  // Extract garment image URL (for base64 capture)
+  const garmentImgUrl = extractGarmentImage();
 
   // ── 1. Root container ──────────────────────────────────────────
   const root = document.createElement("div");
@@ -419,7 +458,6 @@ function injectPanel(brandKey, brandSource) {
   widget.addEventListener("click", () => {
     const frame = document.getElementById("altaana-panel-frame");
     if (frame) {
-      // Toggle iframe visibility by resizing to panel mode
       const isPanel = frame.style.height === "100vh";
       if (isPanel) {
         frame.style.width = "0px";
@@ -456,6 +494,25 @@ function injectPanel(brandKey, brandSource) {
   `;
   root.appendChild(iframe);
   log("Injected iframe [data-altaana-iframe], src:", iframeSrc);
+
+  // ── 4. Capture garment image as base64 and send via postMessage ─
+  if (garmentImgUrl) {
+    iframe.addEventListener("load", async () => {
+      log("Iframe loaded, starting garment image capture...");
+      const result = await captureImageAsBase64(garmentImgUrl);
+      const message = {
+        type: "ALTAANA_GARMENT_IMAGE",
+        garmentImageBase64: result.base64,
+        extractionMethod: result.method,
+        sourceUrl: garmentImgUrl,
+      };
+      iframe.contentWindow.postMessage(message, PANEL_ORIGIN);
+      log("Sent ALTAANA_GARMENT_IMAGE via postMessage, method:", result.method,
+          "size:", result.base64 ? Math.round(result.base64.length / 1024) + "KB" : "null");
+    });
+  } else {
+    log("No garment image URL found, skipping base64 capture");
+  }
 }
 
 // ── Listen for messages from the panel iframe ────────────────────
@@ -467,7 +524,6 @@ window.addEventListener("message", (event) => {
     scrollToSizeSelector();
   }
 
-  // Panel tells us when it opens/closes so we can resize the iframe
   if (event.data?.type === "ALTAANA_PANEL_RESIZE") {
     const iframe = document.getElementById("altaana-panel-frame");
     const widget = document.getElementById("altaana-widget");

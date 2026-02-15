@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Upload, Loader2, RotateCcw, Download, ArrowLeft, ImageIcon } from "lucide-react";
+import { Upload, Loader2, RotateCcw, Download, ArrowLeft, ImageIcon, ChevronDown, ChevronUp } from "lucide-react";
 import { useVirtualTryOn } from "@/hooks/useVirtualTryOn";
 import { toast } from "@/hooks/use-toast";
 
@@ -10,6 +9,8 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 interface VTOScreenProps {
   garmentImageUrl: string | null;
+  garmentImageBase64: string | null;
+  extractionMethod?: string;
   category?: string;
   onBack: () => void;
 }
@@ -23,17 +24,22 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-const VTOScreen = ({ garmentImageUrl, category, onBack }: VTOScreenProps) => {
+const VTOScreen = ({ garmentImageUrl, garmentImageBase64, extractionMethod, category, onBack }: VTOScreenProps) => {
   const [personPhoto, setPersonPhoto] = useState<string | null>(() => {
     try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
   });
-  const [manualGarmentUrl, setManualGarmentUrl] = useState("");
+  const [manualGarmentBase64, setManualGarmentBase64] = useState<string | null>(null);
   const [garmentPreviewError, setGarmentPreviewError] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const garmentFileRef = useRef<HTMLInputElement>(null);
   const { status, outputImageUrl, error, startPrediction, cancel, reset } = useVirtualTryOn();
 
-  const effectiveGarmentUrl = garmentImageUrl || manualGarmentUrl || null;
-  const canGenerate = !!personPhoto && !!effectiveGarmentUrl && status === "idle";
+  // The base64 to send to backend: manual upload > auto-captured > null
+  const effectiveGarmentBase64 = manualGarmentBase64 || garmentImageBase64 || null;
+  // For preview: base64 if available, fall back to URL
+  const garmentPreviewSrc = effectiveGarmentBase64 || garmentImageUrl || null;
+  const canGenerate = !!personPhoto && !!effectiveGarmentBase64 && status === "idle";
 
   // Persist photo in localStorage
   useEffect(() => {
@@ -57,14 +63,29 @@ const VTOScreen = ({ garmentImageUrl, category, onBack }: VTOScreenProps) => {
     setPersonPhoto(base64);
   };
 
+  const handleGarmentFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_FILE_SIZE) {
+      toast({ title: "Image too large", description: "Please upload a garment image under 5MB.", variant: "destructive" });
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please upload an image file.", variant: "destructive" });
+      return;
+    }
+    const base64 = await readFileAsBase64(file);
+    setManualGarmentBase64(base64);
+    setGarmentPreviewError(false);
+  };
+
   const handleGenerate = () => {
-    if (!personPhoto || !effectiveGarmentUrl) return;
-    startPrediction(personPhoto, effectiveGarmentUrl, category);
+    if (!personPhoto || !effectiveGarmentBase64) return;
+    startPrediction(personPhoto, effectiveGarmentBase64, category);
   };
 
   const handleTryAgain = () => {
     reset();
-    handleGenerate();
   };
 
   const handleDownload = () => {
@@ -136,10 +157,25 @@ const VTOScreen = ({ garmentImageUrl, category, onBack }: VTOScreenProps) => {
         See how this item looks on you
       </p>
 
-      {/* Error banner */}
+      {/* Error banner with collapsible details */}
       {(status === "failed" || status === "timeout") && error && (
         <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 mb-4">
           <p className="text-xs text-destructive whitespace-pre-wrap">{error}</p>
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            className="flex items-center gap-1 text-[10px] text-muted-foreground mt-2 hover:text-foreground"
+          >
+            {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            {showDetails ? "Hide details" : "Show details"}
+          </button>
+          {showDetails && (
+            <div className="mt-2 text-[10px] text-muted-foreground space-y-1 border-t border-destructive/10 pt-2">
+              <p>Extraction method: {extractionMethod || "unknown"}</p>
+              {personPhoto && <p>Person photo: ~{Math.round(personPhoto.length * 0.75 / 1024)} KB</p>}
+              {effectiveGarmentBase64 && <p>Garment image: ~{Math.round(effectiveGarmentBase64.length * 0.75 / 1024)} KB</p>}
+              {!effectiveGarmentBase64 && <p>Garment image: not captured (try manual upload)</p>}
+            </div>
+          )}
         </div>
       )}
 
@@ -176,39 +212,48 @@ const VTOScreen = ({ garmentImageUrl, category, onBack }: VTOScreenProps) => {
       {/* Garment image */}
       <div className="mb-6">
         <p className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-2">Garment image</p>
-        {effectiveGarmentUrl ? (
+        {garmentPreviewSrc && !garmentPreviewError ? (
           <div className="w-full rounded-xl overflow-hidden border border-border bg-secondary">
-            {garmentPreviewError ? (
-              <div className="w-full h-40 flex items-center justify-center bg-secondary">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <ImageIcon className="w-4 h-4" />
-                  <span className="text-xs">Image detected — preview unavailable</span>
-                </div>
-              </div>
-            ) : (
-              <img
-                src={effectiveGarmentUrl}
-                alt="Product garment"
-                className="w-full h-40 object-contain bg-white"
-                onError={() => setGarmentPreviewError(true)}
-              />
-            )}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <div className="w-full h-20 rounded-xl border border-dashed border-border flex items-center justify-center bg-secondary/50">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <ImageIcon className="w-4 h-4" />
-                <span className="text-xs">No garment image detected</span>
-              </div>
-            </div>
-            <Input
-              placeholder="Paste garment image URL…"
-              value={manualGarmentUrl}
-              onChange={(e) => setManualGarmentUrl(e.target.value)}
-              className="text-xs bg-secondary border-border"
+            <img
+              src={garmentPreviewSrc}
+              alt="Product garment"
+              className="w-full h-40 object-contain bg-white"
+              onError={() => setGarmentPreviewError(true)}
             />
           </div>
+        ) : garmentPreviewSrc && garmentPreviewError ? (
+          <div className="w-full rounded-xl overflow-hidden border border-border bg-secondary">
+            <div className="w-full h-40 flex items-center justify-center bg-secondary">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <ImageIcon className="w-4 h-4" />
+                <span className="text-xs">Image detected — preview unavailable</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="w-full h-20 rounded-xl border border-dashed border-border flex items-center justify-center bg-secondary/50">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <ImageIcon className="w-4 h-4" />
+              <span className="text-xs">
+                {extractionMethod === "failed"
+                  ? "Couldn't read garment image from this site"
+                  : "No garment image detected"}
+              </span>
+            </div>
+          </div>
+        )}
+        {/* Manual garment upload — always available as fallback */}
+        <input ref={garmentFileRef} type="file" accept="image/*" className="hidden" onChange={handleGarmentFileSelect} />
+        <button
+          onClick={() => garmentFileRef.current?.click()}
+          className="text-[10px] text-primary mt-1 underline"
+        >
+          {effectiveGarmentBase64 ? "Upload different garment" : "Select garment image manually"}
+        </button>
+        {!effectiveGarmentBase64 && garmentImageUrl && (
+          <p className="text-[9px] text-muted-foreground mt-1">
+            Auto-capture failed. Please upload the garment image manually.
+          </p>
         )}
       </div>
 
@@ -221,6 +266,12 @@ const VTOScreen = ({ garmentImageUrl, category, onBack }: VTOScreenProps) => {
       >
         Generate Try-On
       </Button>
+
+      {!effectiveGarmentBase64 && (
+        <p className="text-[9px] text-center text-muted-foreground mb-2">
+          A garment image is required to generate the try-on.
+        </p>
+      )}
 
       <button onClick={onBack} className="text-xs text-muted-foreground underline text-center">
         <ArrowLeft className="w-3 h-3 inline mr-1" />
