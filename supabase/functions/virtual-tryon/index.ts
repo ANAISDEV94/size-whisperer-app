@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
 
   const REPLICATE_API_TOKEN = Deno.env.get("REPLICATE_API_TOKEN");
   if (!REPLICATE_API_TOKEN) {
-    return new Response(JSON.stringify({ error: "Server misconfigured" }), {
+    return new Response(JSON.stringify({ ok: false, error: "Server misconfigured" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -117,7 +117,7 @@ Deno.serve(async (req) => {
       const url = new URL(req.url);
       const predictionId = url.searchParams.get("prediction_id");
       if (!predictionId) {
-        return new Response(JSON.stringify({ error: "prediction_id required" }), {
+        return new Response(JSON.stringify({ ok: false, error: "prediction_id required" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -129,13 +129,14 @@ Deno.serve(async (req) => {
       const data = await res.json();
 
       const status = data.status;
-      const result: Record<string, unknown> = { prediction_id: predictionId, status };
+      const result: Record<string, unknown> = { ok: true, prediction_id: predictionId, status };
 
       if (status === "succeeded") {
         const output = data.output;
         result.output_image_url = Array.isArray(output) ? output[0] : output;
       } else if (status === "failed" || status === "canceled") {
-        result.error = data.error || "Prediction failed";
+        result.ok = false;
+        result.error = data.error ?? "Prediction failed";
       }
 
       return new Response(JSON.stringify(result), {
@@ -146,17 +147,30 @@ Deno.serve(async (req) => {
     // ── POST: Start a new prediction ──
     if (req.method === "POST") {
       const body = await req.json();
-      const { person_image_base64, garment_image_base64, garment_image_url, category } = body;
+      const { person_image_base64, garment_image_base64, garment_image_url } = body;
+
+      // Defensive coalescing of all optional fields
+      const extractionMethod = body.extractionMethod ?? "unknown";
+      const garmentType = body.garmentType ?? "unknown";
+      const category = body.category ?? "unknown";
 
       if (!person_image_base64) {
-        return new Response(JSON.stringify({ error: "person_image_base64 required" }), {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "person_image_base64 required",
+          debugInfo: { extractionMethod, garmentType, category },
+        }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
       if (!garment_image_base64 && !garment_image_url) {
-        return new Response(JSON.stringify({ error: "garment_image_base64 or garment_image_url required" }), {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "garment_image_base64 or garment_image_url required",
+          debugInfo: { extractionMethod, garmentType, category },
+        }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -166,8 +180,18 @@ Deno.serve(async (req) => {
       try {
         validateImageBase64(person_image_base64, "person_image_base64");
       } catch (err) {
-        console.error("[virtual-tryon] Person image validation failed:", JSON.stringify(err));
-        return new Response(JSON.stringify({ error: `Invalid person image: ${(err as Record<string, unknown>).reason}`, detail: err }), {
+        const reason = (err as Record<string, unknown>).reason ?? "unknown";
+        console.error(`[virtual-tryon] Person image validation failed: ${reason}`);
+        return new Response(JSON.stringify({
+          ok: false,
+          error: `Invalid person image: ${reason}`,
+          debugInfo: {
+            extractionMethod,
+            userSizeKB: Math.round((person_image_base64?.length ?? 0) * 0.75 / 1024),
+            garmentSizeKB: Math.round((garment_image_base64?.length ?? 0) * 0.75 / 1024),
+          },
+          detail: err,
+        }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -178,32 +202,50 @@ Deno.serve(async (req) => {
         try {
           validateImageBase64(garment_image_base64, "garment_image_base64");
         } catch (err) {
-          console.error("[virtual-tryon] Garment image validation failed:", JSON.stringify(err));
-          return new Response(JSON.stringify({ error: `Invalid garment image: ${(err as Record<string, unknown>).reason}`, detail: err }), {
+          const reason = (err as Record<string, unknown>).reason ?? "unknown";
+          console.error(`[virtual-tryon] Garment image validation failed: ${reason}`);
+          return new Response(JSON.stringify({
+            ok: false,
+            error: `Invalid garment image: ${reason}`,
+            debugInfo: {
+              extractionMethod,
+              userSizeKB: Math.round((person_image_base64?.length ?? 0) * 0.75 / 1024),
+              garmentSizeKB: Math.round((garment_image_base64?.length ?? 0) * 0.75 / 1024),
+            },
+            detail: err,
+          }), {
             status: 400,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
       }
 
-      console.log("[virtual-tryon] Input accepted", {
-        personApproxKB: Math.round(person_image_base64.length * 0.75 / 1024),
+      console.log(`[virtual-tryon] Input accepted — extraction: ${extractionMethod}, garmentType: ${garmentType}, category: ${category}`, {
+        personApproxKB: Math.round((person_image_base64?.length ?? 0) * 0.75 / 1024),
         garmentSource: garment_image_base64 ? "base64" : "url",
-        garmentUrl: garment_image_url || null,
+        garmentUrl: garment_image_url ?? "none",
       });
 
       // Size check for person image (~5MB limit)
-      const personSizeBytes = (person_image_base64.length * 3) / 4;
+      const personSizeBytes = ((person_image_base64?.length ?? 0) * 3) / 4;
       if (personSizeBytes > 5 * 1024 * 1024) {
-        return new Response(JSON.stringify({ error: "Person image too large. Max 5MB." }), {
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Person image too large. Max 5MB.",
+          debugInfo: { extractionMethod, userSizeKB: Math.round(personSizeBytes / 1024) },
+        }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       if (garment_image_base64) {
-        const garmentSizeBytes = (garment_image_base64.length * 3) / 4;
+        const garmentSizeBytes = ((garment_image_base64?.length ?? 0) * 3) / 4;
         if (garmentSizeBytes > 5 * 1024 * 1024) {
-          return new Response(JSON.stringify({ error: "Garment image too large. Max 5MB." }), {
+          return new Response(JSON.stringify({
+            ok: false,
+            error: "Garment image too large. Max 5MB.",
+            debugInfo: { extractionMethod, garmentSizeKB: Math.round(garmentSizeBytes / 1024) },
+          }), {
             status: 400,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
@@ -221,10 +263,15 @@ Deno.serve(async (req) => {
       try {
         console.log("[virtual-tryon] Uploading person image to storage...");
         personPublicUrl = await uploadToSupabaseStorage(person_image_base64, personFilename);
-        console.log("[virtual-tryon] Person image uploaded:", personPublicUrl);
+        console.log(`[virtual-tryon] Person image uploaded: ${personPublicUrl}`);
       } catch (err) {
-        console.error("[virtual-tryon] Person image upload failed:", (err as Error).message);
-        return new Response(JSON.stringify({ error: `Failed to upload person image: ${(err as Error).message}` }), {
+        const message = (err as Error).message ?? "unknown error";
+        console.error(`[virtual-tryon] Person image upload failed: ${message}`);
+        return new Response(JSON.stringify({
+          ok: false,
+          error: `Failed to upload person image: ${message}`,
+          debugInfo: { extractionMethod },
+        }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -236,59 +283,76 @@ Deno.serve(async (req) => {
           console.log("[virtual-tryon] Uploading garment image from base64...");
           garmentPublicUrl = await uploadToSupabaseStorage(garment_image_base64, garmentFilename);
         } else {
-          console.log("[virtual-tryon] Fetching garment image from URL:", garment_image_url);
+          console.log(`[virtual-tryon] Fetching garment image from URL: ${garment_image_url ?? "none"}`);
           garmentPublicUrl = await fetchAndUploadFromUrl(garment_image_url, garmentFilename);
         }
-        console.log("[virtual-tryon] Garment image ready:", garmentPublicUrl);
+        console.log(`[virtual-tryon] Garment image ready: ${garmentPublicUrl}`);
       } catch (err) {
-        console.error("[virtual-tryon] Garment image processing failed:", (err as Error).message);
-        return new Response(JSON.stringify({ error: `Failed to process garment image: ${(err as Error).message}` }), {
+        const message = (err as Error).message ?? "unknown error";
+        console.error(`[virtual-tryon] Garment image processing failed: ${message}`);
+        return new Response(JSON.stringify({
+          ok: false,
+          error: `Failed to process garment image: ${message}`,
+          debugInfo: { extractionMethod, garmentSource: garment_image_base64 ? "base64" : "url" },
+        }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      const res = await fetch(REPLICATE_API_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${REPLICATE_API_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          version: "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
-          input: {
-            human_img: personPublicUrl,
-            garm_img: garmentPublicUrl,
-            category: vtonCategory,
+      // Replicate API call — wrapped in dedicated try/catch
+      let replicateResponse: Response;
+      try {
+        replicateResponse = await fetch(REPLICATE_API_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${REPLICATE_API_TOKEN}`,
+            "Content-Type": "application/json",
           },
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        console.error("[virtual-tryon] Replicate error:", JSON.stringify(data));
-        return new Response(JSON.stringify({ error: data.detail || "Failed to start prediction" }), {
-          status: res.status,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            version: "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
+            input: {
+              human_img: personPublicUrl,
+              garm_img: garmentPublicUrl,
+              category: vtonCategory,
+            },
+          }),
         });
+      } catch (err) {
+        const message = (err as Error).message ?? "unknown network error";
+        console.error(`[virtual-tryon] Replicate request failed: ${message}`);
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "Replicate request failed",
+          debugInfo: { status: 0, message, extractionMethod },
+        }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // Note: temp files are left in storage for Replicate to download.
-      // A scheduled cleanup job can remove old files later.
+      const data = await replicateResponse.json();
 
-      return new Response(JSON.stringify({ prediction_id: data.id, status: data.status }), {
+      if (!replicateResponse.ok) {
+        const detail = data?.detail ?? "Failed to start prediction";
+        console.error(`[virtual-tryon] Replicate error [${replicateResponse.status}]: ${detail}`);
+        return new Response(JSON.stringify({
+          ok: false,
+          error: detail,
+          debugInfo: { status: replicateResponse.status, extractionMethod },
+        }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      return new Response(JSON.stringify({ ok: true, prediction_id: data.id, status: data.status }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+    return new Response(JSON.stringify({ ok: false, error: "Method not allowed" }), {
       status: 405,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
-    console.error("[virtual-tryon] Error:", err);
-    return new Response(JSON.stringify({ error: "Internal server error" }), {
+    const message = (err as Error).message ?? "unknown error";
+    console.error(`[virtual-tryon] Unhandled error: ${message}`);
+    return new Response(JSON.stringify({ ok: false, error: "Internal server error", debugInfo: { message } }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

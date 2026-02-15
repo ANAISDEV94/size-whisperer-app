@@ -294,13 +294,13 @@ function extractGarmentImage() {
   const ogImg = document.querySelector('meta[property="og:image"]');
   if (ogImg) {
     const url = ogImg.getAttribute("content");
-    if (url) { log("Garment image from og:image:", url); return url; }
+    if (url) { log("Garment image from og:image:", url); return { url, source: "og_image" }; }
   }
   // 2. product:image or itemprop image
   const productImg = document.querySelector('meta[property="product:image"]') || document.querySelector('[itemprop="image"]');
   if (productImg) {
     const url = productImg.getAttribute("content") || productImg.getAttribute("src");
-    if (url) { log("Garment image from itemprop/product:image:", url); return url; }
+    if (url) { log("Garment image from itemprop/product:image:", url); return { url, source: "product_image" }; }
   }
   // 3. JSON-LD Product image
   try {
@@ -310,7 +310,7 @@ function extractGarmentImage() {
       const img = json?.image;
       if (img) {
         const url = Array.isArray(img) ? img[0] : (typeof img === "string" ? img : img?.url);
-        if (url) { log("Garment image from JSON-LD:", url); return url; }
+        if (url) { log("Garment image from JSON-LD:", url); return { url, source: "json_ld" }; }
       }
     }
   } catch { /* ignore */ }
@@ -325,9 +325,9 @@ function extractGarmentImage() {
     const area = w * h;
     if (area > bestArea) { bestArea = area; best = img; }
   }
-  if (best) { log("Garment image from largest img:", best.src); return best.src; }
+  if (best) { log("Garment image from largest img:", best.src); return { url: best.src, source: "largest_img" }; }
   log("No garment image found");
-  return null;
+  return { url: null, source: "none" };
 }
 
 // ── Capture image as PNG base64 via canvas ──────────────────────
@@ -402,7 +402,9 @@ function injectPanel(brandKey, brandSource) {
   }
 
   // Extract garment image URL (for base64 capture)
-  const garmentImgUrl = extractGarmentImage();
+  const garmentResult = extractGarmentImage();
+  const garmentImgUrl = garmentResult.url;
+  const garmentSource = garmentResult.source || "unknown";
 
   // ── 1. Root container ──────────────────────────────────────────
   const root = document.createElement("div");
@@ -496,23 +498,32 @@ function injectPanel(brandKey, brandSource) {
   log("Injected iframe [data-altaana-iframe], src:", iframeSrc);
 
   // ── 4. Capture garment image as base64 and send via postMessage ─
-  if (garmentImgUrl) {
-    iframe.addEventListener("load", async () => {
+  iframe.addEventListener("load", async () => {
+    if (garmentImgUrl) {
       log("Iframe loaded, starting garment image capture...");
       const result = await captureImageAsBase64(garmentImgUrl);
+      const extractionMethod = result.base64
+        ? (garmentSource + "/" + result.method)
+        : (garmentSource !== "none" ? garmentSource + "/cors_blocked" : "none");
       const message = {
         type: "ALTAANA_GARMENT_IMAGE",
         garmentImageBase64: result.base64,
-        extractionMethod: result.method,
+        extractionMethod: extractionMethod,
         sourceUrl: garmentImgUrl,
       };
       iframe.contentWindow.postMessage(message, PANEL_ORIGIN);
-      log("Sent ALTAANA_GARMENT_IMAGE via postMessage, method:", result.method,
+      log("Sent ALTAANA_GARMENT_IMAGE via postMessage, method:", extractionMethod,
           "size:", result.base64 ? Math.round(result.base64.length / 1024) + "KB" : "null");
-    });
-  } else {
-    log("No garment image URL found, skipping base64 capture");
-  }
+    } else {
+      log("No garment image URL found, sending extractionMethod=none");
+      iframe.contentWindow.postMessage({
+        type: "ALTAANA_GARMENT_IMAGE",
+        garmentImageBase64: null,
+        extractionMethod: "none",
+        sourceUrl: null,
+      }, PANEL_ORIGIN);
+    }
+  });
 }
 
 // ── Listen for messages from the panel iframe ────────────────────

@@ -16,6 +16,10 @@ interface VTOScreenProps {
   onBack: () => void;
 }
 
+// 1x1 red PNG for self-test
+const SELF_TEST_PERSON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+const SELF_TEST_GARMENT = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -25,7 +29,7 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-const VTOScreen = ({ garmentImageUrl, garmentImageBase64, garmentImageSourceUrl, extractionMethod, category, onBack }: VTOScreenProps) => {
+const VTOScreen = ({ garmentImageUrl, garmentImageBase64, garmentImageSourceUrl, extractionMethod = "unknown", category = "unknown", onBack }: VTOScreenProps) => {
   const [personPhoto, setPersonPhoto] = useState<string | null>(() => {
     try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
   });
@@ -84,8 +88,44 @@ const VTOScreen = ({ garmentImageUrl, garmentImageBase64, garmentImageSourceUrl,
   };
 
   const handleGenerate = () => {
-    if (!personPhoto || (!effectiveGarmentBase64 && !effectiveGarmentUrl)) return;
-    startPrediction(personPhoto, effectiveGarmentBase64, category, effectiveGarmentUrl || undefined);
+    if (!personPhoto) {
+      toast({ title: "Photo required", description: "Please upload a front-facing photo of yourself.", variant: "destructive" });
+      return;
+    }
+    if (!effectiveGarmentBase64 && !effectiveGarmentUrl) {
+      toast({ title: "Garment image required", description: "Please upload a garment image manually.", variant: "destructive" });
+      return;
+    }
+    startPrediction(personPhoto, effectiveGarmentBase64, category ?? "unknown", effectiveGarmentUrl || undefined, extractionMethod ?? "unknown");
+  };
+
+  const handleSelfTest = async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/virtual-tryon`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({
+          person_image_base64: SELF_TEST_PERSON,
+          garment_image_base64: SELF_TEST_GARMENT,
+          category: "upper_body",
+          extractionMethod: "self_test",
+          garmentType: "test",
+          debug: true,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.prediction_id) {
+        toast({ title: "Self-test passed ✓", description: `Prediction started: ${data.prediction_id}` });
+      } else {
+        toast({ title: "Self-test failed", description: data?.error ?? JSON.stringify(data), variant: "destructive" });
+      }
+    } catch (err) {
+      toast({ title: "Self-test error", description: (err as Error).message, variant: "destructive" });
+    }
   };
 
   const handleTryAgain = () => {
@@ -174,7 +214,7 @@ const VTOScreen = ({ garmentImageUrl, garmentImageBase64, garmentImageSourceUrl,
           </button>
           {showDetails && (
             <div className="mt-2 text-[10px] text-muted-foreground space-y-1 border-t border-destructive/10 pt-2">
-              <p>Extraction method: {extractionMethod || "unknown"}</p>
+              <p>Extraction method: {extractionMethod ?? "unknown"}</p>
               {personPhoto && <p>Person photo: ~{Math.round(personPhoto.length * 0.75 / 1024)} KB</p>}
               {effectiveGarmentBase64 && <p>Garment image: ~{Math.round(effectiveGarmentBase64.length * 0.75 / 1024)} KB</p>}
               {!effectiveGarmentBase64 && <p>Garment image: not captured (try manual upload)</p>}
@@ -285,6 +325,15 @@ const VTOScreen = ({ garmentImageUrl, garmentImageBase64, garmentImageSourceUrl,
       <p className="text-[9px] text-muted-foreground text-center mt-4 leading-relaxed border-t border-border pt-4">
         Your photo is processed securely and never stored on our servers.
       </p>
+
+      {import.meta.env.DEV && (
+        <button
+          onClick={handleSelfTest}
+          className="text-[9px] text-muted-foreground underline mt-2 mb-2"
+        >
+          🧪 Self-test backend
+        </button>
+      )}
     </div>
   );
 };
