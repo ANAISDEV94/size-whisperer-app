@@ -134,7 +134,6 @@ Deno.serve(async (req) => {
 
       const vtonCategory = mapCategory(category);
 
-      // Use model-based API (more resilient than version hash)
       const res = await fetch(REPLICATE_API_URL, {
         method: "POST",
         headers: {
@@ -142,7 +141,7 @@ Deno.serve(async (req) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "cuuupid/idm-vton",
+          version: "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
           input: {
             human_img: personImg,
             garm_img: garmentImg,
