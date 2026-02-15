@@ -1,6 +1,39 @@
 import { corsHeaders } from "../_shared/cors.ts";
 
 const REPLICATE_API_URL = "https://api.replicate.com/v1/predictions";
+const REPLICATE_FILES_URL = "https://api.replicate.com/v1/files";
+
+// Upload a base64 data URI to Replicate's Files API, return the hosted URL
+async function uploadToReplicateFiles(base64DataUri: string, filename: string, token: string): Promise<string> {
+  const match = base64DataUri.match(/^data:(image\/\w+);base64,(.+)$/);
+  if (!match) throw new Error("Invalid data URI format");
+
+  const mimeType = match[1];
+  const raw = match[2];
+  const binaryString = atob(raw);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+
+  const blob = new Blob([bytes], { type: mimeType });
+  const formData = new FormData();
+  formData.append("content", blob, filename);
+
+  const res = await fetch(REPLICATE_FILES_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Replicate file upload failed (${res.status}): ${errText}`);
+  }
+
+  const data = await res.json();
+  return data.urls.get;
+}
 
 // Map ALTAANA categories to IDM-VTON categories
 function mapCategory(cat?: string): string {
@@ -142,6 +175,32 @@ Deno.serve(async (req) => {
 
       const vtonCategory = mapCategory(category);
 
+      // Upload both images to Replicate Files API to get hosted URLs
+      let personFileUrl: string;
+      let garmentFileUrl: string;
+      try {
+        console.log("[virtual-tryon] Uploading person image to Replicate Files...");
+        personFileUrl = await uploadToReplicateFiles(person_image_base64, "person.png", REPLICATE_API_TOKEN);
+        console.log("[virtual-tryon] Person image uploaded OK");
+      } catch (err) {
+        console.error("[virtual-tryon] Person image upload failed:", (err as Error).message);
+        return new Response(JSON.stringify({ error: `Failed to upload person image: ${(err as Error).message}` }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      try {
+        console.log("[virtual-tryon] Uploading garment image to Replicate Files...");
+        garmentFileUrl = await uploadToReplicateFiles(garment_image_base64, "garment.png", REPLICATE_API_TOKEN);
+        console.log("[virtual-tryon] Garment image uploaded OK");
+      } catch (err) {
+        console.error("[virtual-tryon] Garment image upload failed:", (err as Error).message);
+        return new Response(JSON.stringify({ error: `Failed to upload garment image: ${(err as Error).message}` }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       const res = await fetch(REPLICATE_API_URL, {
         method: "POST",
         headers: {
@@ -151,8 +210,8 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           version: "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
           input: {
-            human_img: person_image_base64,
-            garm_img: garment_image_base64,
+            human_img: personFileUrl,
+            garm_img: garmentFileUrl,
             category: vtonCategory,
           },
         }),
