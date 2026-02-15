@@ -3,7 +3,7 @@
  *
  * Detects the current brand from the page domain, infers a garment category
  * from the URL path, and injects the hosted panel UI inside an iframe.
- * Captures garment images client-side as base64 PNG via canvas.
+ * Captures garment images client-side as base64 JPEG via canvas.
  */
 
 // ── Debug flag – set to false to silence all [Altaana] console logs ──
@@ -115,6 +115,275 @@ const DOM_CATEGORY_SIGNALS = {
 const WIDGET_WIDTH = 180;
 const WIDGET_HEIGHT = 41;
 const PANEL_IFRAME_WIDTH = 440;
+
+// ── Gallery selectors for PDP garment image extraction ────────────
+const GALLERY_SELECTORS = [
+  '[data-testid*="gallery"]',
+  '.product-gallery',
+  '.pdp-gallery',
+  '.product-images',
+  '[class*="product-image"]',
+  '[class*="pdp-image"]',
+  '.carousel',
+  '[class*="carousel"]',
+  '[class*="slider"]',
+  '[class*="swiper"]',
+  '[class*="hero-image"]',
+  '[class*="main-image"]',
+  '.product-media',
+  '[class*="product-media"]',
+];
+
+// ── Exclusion selectors for largest-img fallback ──────────────────
+const EXCLUDE_ANCESTORS = [
+  'nav', 'header', 'footer',
+  '[class*="logo"]', '[class*="icon"]',
+  '[class*="badge"]', '[class*="banner"]',
+  '[class*="promo"]', '[class*="recommend"]',
+  '[class*="similar"]', '[class*="also-like"]',
+  '[class*="recently"]', '[class*="wishlist"]',
+  '[class*="cart"]', '[class*="nav"]',
+];
+const EXCLUDE_ANCESTOR_SELECTOR = EXCLUDE_ANCESTORS.join(", ");
+
+// ── Helper: parse srcset and return URL of largest width candidate ─
+function parseSrcsetLargest(srcset) {
+  if (!srcset) return null;
+  let best = null;
+  let bestWidth = 0;
+  const candidates = srcset.split(",");
+  for (const candidate of candidates) {
+    const parts = candidate.trim().split(/\s+/);
+    if (parts.length < 1) continue;
+    const url = parts[0];
+    if (!url) continue;
+    // Look for width descriptor like "1200w"
+    for (let i = 1; i < parts.length; i++) {
+      const match = parts[i].match(/^(\d+)w$/);
+      if (match) {
+        const w = parseInt(match[1], 10);
+        if (w > bestWidth) {
+          bestWidth = w;
+          best = url;
+        }
+      }
+    }
+    // If no width descriptor found yet and this is the first candidate, use it as fallback
+    if (!best) best = url;
+  }
+  return best;
+}
+
+// ── Helper: normalize image URL ───────────────────────────────────
+function normalizeImageUrl(url) {
+  if (!url) return null;
+  let normalized = url.trim();
+  // Protocol-relative → https
+  if (normalized.startsWith("//")) {
+    normalized = "https:" + normalized;
+  }
+  // Relative path → absolute
+  if (normalized.startsWith("/") && !normalized.startsWith("//")) {
+    normalized = location.origin + normalized;
+  }
+  // Handle relative paths without leading /
+  if (!normalized.startsWith("http") && !normalized.startsWith("data:")) {
+    try {
+      normalized = new URL(normalized, location.href).href;
+    } catch {
+      return null;
+    }
+  }
+  return normalized;
+}
+
+// ── Helper: resolve best URL from an <img> element ────────────────
+function resolveImgUrl(img) {
+  // Prefer currentSrc (accounts for responsive loading)
+  let url = img.currentSrc || img.src;
+  // If no good URL, try srcset
+  if (!url || url === "about:blank" || url === "") {
+    url = parseSrcsetLargest(img.getAttribute("srcset"));
+  }
+  return normalizeImageUrl(url);
+}
+
+// ── Garment image extraction with priority order ──────────────────
+function extractGarmentImage() {
+  // Priority 1: Gallery-scoped DOM images
+  for (const selector of GALLERY_SELECTORS) {
+    const container = document.querySelector(selector);
+    if (!container) continue;
+    const imgs = container.querySelectorAll("img");
+    let best = null;
+    let bestArea = 0;
+    for (const img of imgs) {
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      if (w < 250 || h < 250) continue;
+      const area = w * h;
+      if (area > bestArea) { bestArea = area; best = img; }
+    }
+    if (best) {
+      const url = resolveImgUrl(best);
+      if (url) {
+        log("Garment image from gallery:", selector, "→", url);
+        return { url, source: "gallery_img", element: best };
+      }
+    }
+  }
+
+  // Priority 2: Largest visible <img> in viewport (excluding icons/logos/nav)
+  const allImgs = document.querySelectorAll("img");
+  let bestImg = null;
+  let bestArea = 0;
+  for (const img of allImgs) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (w < 250 || h < 250) continue;
+    // Skip images inside excluded ancestors
+    if (img.closest(EXCLUDE_ANCESTOR_SELECTOR)) continue;
+    // Skip tiny display images (CSS-hidden or display:none)
+    const rect = img.getBoundingClientRect();
+    if (rect.width < 100 || rect.height < 100) continue;
+    const area = w * h;
+    if (area > bestArea) { bestArea = area; bestImg = img; }
+  }
+  if (bestImg) {
+    const url = resolveImgUrl(bestImg);
+    if (url) {
+      log("Garment image from largest visible img:", url);
+      return { url, source: "largest_img", element: bestImg };
+    }
+  }
+
+  // Priority 3: og:image meta tag
+  const ogImg = document.querySelector('meta[property="og:image"]');
+  if (ogImg) {
+    const url = normalizeImageUrl(ogImg.getAttribute("content"));
+    if (url) { log("Garment image from og:image:", url); return { url, source: "og_image", element: null }; }
+  }
+
+  // Priority 4: twitter:image meta tag
+  const twImg = document.querySelector('meta[name="twitter:image"]') || document.querySelector('meta[property="twitter:image"]');
+  if (twImg) {
+    const url = normalizeImageUrl(twImg.getAttribute("content"));
+    if (url) { log("Garment image from twitter:image:", url); return { url, source: "twitter_image", element: null }; }
+  }
+
+  // Priority 5: JSON-LD Product image
+  try {
+    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+    for (const script of scripts) {
+      const json = JSON.parse(script.textContent);
+      const img = json?.image;
+      if (img) {
+        const raw = Array.isArray(img) ? img[0] : (typeof img === "string" ? img : img?.url);
+        const url = normalizeImageUrl(raw);
+        if (url) { log("Garment image from JSON-LD:", url); return { url, source: "json_ld", element: null }; }
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Priority 6: product:image or itemprop image
+  const productImg = document.querySelector('meta[property="product:image"]') || document.querySelector('[itemprop="image"]');
+  if (productImg) {
+    const url = normalizeImageUrl(productImg.getAttribute("content") || productImg.getAttribute("src"));
+    if (url) { log("Garment image from product:image/itemprop:", url); return { url, source: "product_image", element: null }; }
+  }
+
+  log("No garment image found");
+  return { url: null, source: "none", element: null };
+}
+
+// ── Capture image as base64 JPEG via canvas ─────────────────────
+async function captureImageAsBase64(imgUrl, imgElement) {
+  if (!imgUrl) return { base64: null, method: "failed", fetchStatus: "skipped" };
+
+  const absoluteUrl = normalizeImageUrl(imgUrl) || imgUrl;
+  log("captureImageAsBase64: attempting", absoluteUrl);
+
+  // Strategy 1: If we have the DOM element, draw directly to canvas
+  if (imgElement && imgElement.naturalWidth > 0 && imgElement.naturalHeight > 0) {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = imgElement.naturalWidth;
+      canvas.height = imgElement.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(imgElement, 0, 0);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      if (dataUrl && dataUrl.startsWith("data:image/")) {
+        log("captureImageAsBase64: DOM canvas success, length:", dataUrl.length);
+        return { base64: dataUrl, method: "dom_canvas", fetchStatus: "skipped" };
+      }
+    } catch (e) {
+      log("captureImageAsBase64: DOM canvas failed (likely tainted):", e.message);
+      // Fall through to Strategy 1b
+    }
+  }
+
+  // Strategy 1b: Find matching DOM <img> by URL and draw to canvas
+  try {
+    const imgs = document.querySelectorAll("img");
+    for (const img of imgs) {
+      const imgSrc = normalizeImageUrl(img.src);
+      const imgCurSrc = normalizeImageUrl(img.currentSrc);
+      if (imgSrc === absoluteUrl || imgCurSrc === absoluteUrl) {
+        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+          if (dataUrl && dataUrl.startsWith("data:image/")) {
+            log("captureImageAsBase64: matched DOM img canvas success, length:", dataUrl.length);
+            return { base64: dataUrl, method: "dom_canvas", fetchStatus: "skipped" };
+          }
+        }
+      }
+    }
+    log("captureImageAsBase64: no matching DOM img found or not loaded");
+  } catch (e) {
+    log("captureImageAsBase64: DOM canvas search failed:", e.message);
+  }
+
+  // Strategy 2: fetch as blob → convert if needed → canvas → JPEG base64
+  try {
+    const res = await fetch(absoluteUrl, { mode: "cors" });
+    if (!res.ok) {
+      log("captureImageAsBase64: fetch returned", res.status);
+      return { base64: null, method: "failed", fetchStatus: "non_ok_" + res.status };
+    }
+    const blob = await res.blob();
+    const blobType = blob.type || "";
+    log("captureImageAsBase64: fetched blob type:", blobType, "size:", blob.size);
+
+    // Convert blob to canvas (handles AVIF, WEBP, etc. via createImageBitmap)
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0);
+    // Always output as JPEG for consistent format and smaller size
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+    if (dataUrl && dataUrl.startsWith("data:image/")) {
+      const convertedFrom = (blobType.includes("avif") || blobType.includes("webp")) ? blobType : "direct";
+      log("captureImageAsBase64: fetch+canvas success, converted from:", convertedFrom, "length:", dataUrl.length);
+      return { base64: dataUrl, method: "fetch_canvas", fetchStatus: "ok" };
+    }
+  } catch (e) {
+    const isCors = e.message && (e.message.includes("CORS") || e.message.includes("NetworkError") || e.message.includes("Failed to fetch"));
+    log("captureImageAsBase64: fetch+canvas failed:", e.message);
+    return { base64: null, method: "failed", fetchStatus: isCors ? "cors_fail" : "error" };
+  }
+
+  log("captureImageAsBase64: all methods failed");
+  return { base64: null, method: "failed", fetchStatus: "all_failed" };
+}
+
+// ── Brand detection ───────────────────────────────────────────────
 
 function detectBrandFromDOM() {
   const isRevolve = location.hostname.replace(/^www\./, "").includes("revolve.com");
@@ -288,103 +557,6 @@ function isProductPage() {
   return segments.length >= 2;
 }
 
-// ── Garment image extraction (returns URL) ──────────────────────
-function extractGarmentImage() {
-  // 1. og:image
-  const ogImg = document.querySelector('meta[property="og:image"]');
-  if (ogImg) {
-    const url = ogImg.getAttribute("content");
-    if (url) { log("Garment image from og:image:", url); return { url, source: "og_image" }; }
-  }
-  // 2. product:image or itemprop image
-  const productImg = document.querySelector('meta[property="product:image"]') || document.querySelector('[itemprop="image"]');
-  if (productImg) {
-    const url = productImg.getAttribute("content") || productImg.getAttribute("src");
-    if (url) { log("Garment image from itemprop/product:image:", url); return { url, source: "product_image" }; }
-  }
-  // 3. JSON-LD Product image
-  try {
-    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-    for (const script of scripts) {
-      const json = JSON.parse(script.textContent);
-      const img = json?.image;
-      if (img) {
-        const url = Array.isArray(img) ? img[0] : (typeof img === "string" ? img : img?.url);
-        if (url) { log("Garment image from JSON-LD:", url); return { url, source: "json_ld" }; }
-      }
-    }
-  } catch { /* ignore */ }
-  // 4. Largest gallery image
-  const imgs = document.querySelectorAll("img");
-  let best = null;
-  let bestArea = 0;
-  for (const img of imgs) {
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
-    if (w < 200 || h < 200) continue;
-    const area = w * h;
-    if (area > bestArea) { bestArea = area; best = img; }
-  }
-  if (best) { log("Garment image from largest img:", best.src); return { url: best.src, source: "largest_img" }; }
-  log("No garment image found");
-  return { url: null, source: "none" };
-}
-
-// ── Capture image as PNG base64 via canvas ──────────────────────
-async function captureImageAsBase64(imgUrl) {
-  if (!imgUrl) return { base64: null, method: "failed" };
-
-  // Resolve to absolute URL
-  const absoluteUrl = new URL(imgUrl, location.href).href;
-  log("captureImageAsBase64: attempting", absoluteUrl);
-
-  // Strategy 1: Find matching DOM <img> and draw to canvas
-  try {
-    const imgs = document.querySelectorAll("img");
-    for (const img of imgs) {
-      if (img.src === absoluteUrl || img.currentSrc === absoluteUrl ||
-          img.src === imgUrl || img.currentSrc === imgUrl) {
-        // Found matching element — try drawing to canvas
-        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-          const canvas = document.createElement("canvas");
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0);
-          // toDataURL will throw if canvas is tainted (cross-origin)
-          const dataUrl = canvas.toDataURL("image/png");
-          log("captureImageAsBase64: DOM canvas success, length:", dataUrl.length);
-          return { base64: dataUrl, method: "dom_canvas" };
-        }
-      }
-    }
-    log("captureImageAsBase64: no matching DOM img found or not loaded");
-  } catch (e) {
-    log("captureImageAsBase64: DOM canvas failed (likely tainted):", e.message);
-  }
-
-  // Strategy 2: fetch as blob → ImageBitmap → canvas
-  try {
-    const res = await fetch(absoluteUrl);
-    if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-    const blob = await res.blob();
-    const bitmap = await createImageBitmap(blob);
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(bitmap, 0, 0);
-    const dataUrl = canvas.toDataURL("image/png");
-    log("captureImageAsBase64: fetch+canvas success, length:", dataUrl.length);
-    return { base64: dataUrl, method: "fetch_canvas" };
-  } catch (e) {
-    log("captureImageAsBase64: fetch+canvas failed:", e.message);
-  }
-
-  log("captureImageAsBase64: all methods failed");
-  return { base64: null, method: "failed" };
-}
-
 function injectPanel(brandKey, brandSource) {
   if (document.getElementById("altaana-root")) {
     log("Root already exists, skipping injection");
@@ -395,16 +567,16 @@ function injectPanel(brandKey, brandSource) {
   log("Detected category:", category);
 
   const productUrl = encodeURIComponent(location.href);
-  // NOTE: garment_image is NO LONGER passed as URL param — sent via postMessage instead
   let iframeSrc = `${PANEL_ORIGIN}/?brand=${brandKey}&category=${category}&url=${productUrl}&source=extension`;
   if (brandSource) {
     iframeSrc += `&brand_source=${brandSource}`;
   }
 
-  // Extract garment image URL (for base64 capture)
+  // Extract garment image
   const garmentResult = extractGarmentImage();
   const garmentImgUrl = garmentResult.url;
-  const garmentSource = garmentResult.source || "unknown";
+  const garmentSource = garmentResult.source || "none";
+  const garmentElement = garmentResult.element || null;
 
   // ── 1. Root container ──────────────────────────────────────────
   const root = document.createElement("div");
@@ -498,21 +670,23 @@ function injectPanel(brandKey, brandSource) {
   log("Injected iframe [data-altaana-iframe], src:", iframeSrc);
 
   // ── 4. Capture garment image as base64 and send via postMessage ─
-  iframe.addEventListener("load", async () => {
+  async function performExtractionAndSend() {
     if (garmentImgUrl) {
-      log("Iframe loaded, starting garment image capture...");
-      const result = await captureImageAsBase64(garmentImgUrl);
+      log("Starting garment image capture...");
+      const result = await captureImageAsBase64(garmentImgUrl, garmentElement);
       const extractionMethod = result.base64
         ? (garmentSource + "/" + result.method)
-        : (garmentSource !== "none" ? garmentSource + "/cors_blocked" : "none");
+        : (garmentSource !== "none" ? garmentSource + "/" + (result.fetchStatus || "failed") : "none");
       const message = {
         type: "ALTAANA_GARMENT_IMAGE",
         garmentImageBase64: result.base64,
         extractionMethod: extractionMethod,
         sourceUrl: garmentImgUrl,
+        fetchStatus: result.fetchStatus || "unknown",
       };
       iframe.contentWindow.postMessage(message, PANEL_ORIGIN);
-      log("Sent ALTAANA_GARMENT_IMAGE via postMessage, method:", extractionMethod,
+      log("Sent ALTAANA_GARMENT_IMAGE, method:", extractionMethod,
+          "fetchStatus:", result.fetchStatus || "unknown",
           "size:", result.base64 ? Math.round(result.base64.length / 1024) + "KB" : "null");
     } else {
       log("No garment image URL found, sending extractionMethod=none");
@@ -521,7 +695,49 @@ function injectPanel(brandKey, brandSource) {
         garmentImageBase64: null,
         extractionMethod: "none",
         sourceUrl: null,
+        fetchStatus: "skipped",
       }, PANEL_ORIGIN);
+    }
+  }
+
+  iframe.addEventListener("load", performExtractionAndSend);
+
+  // ── 5. Listen for re-extraction requests from panel ────────────
+  window.addEventListener("message", (event) => {
+    if (event.origin !== PANEL_ORIGIN) return;
+    if (event.data?.type === "ALTAANA_RERUN_EXTRACTION") {
+      log("Re-extraction requested by panel");
+      // Re-run extraction from scratch
+      const freshResult = extractGarmentImage();
+      const freshUrl = freshResult.url;
+      const freshSource = freshResult.source || "none";
+      const freshElement = freshResult.element || null;
+      
+      (async () => {
+        if (freshUrl) {
+          const captureResult = await captureImageAsBase64(freshUrl, freshElement);
+          const method = captureResult.base64
+            ? (freshSource + "/" + captureResult.method)
+            : (freshSource !== "none" ? freshSource + "/" + (captureResult.fetchStatus || "failed") : "none");
+          iframe.contentWindow.postMessage({
+            type: "ALTAANA_GARMENT_IMAGE",
+            garmentImageBase64: captureResult.base64,
+            extractionMethod: method,
+            sourceUrl: freshUrl,
+            fetchStatus: captureResult.fetchStatus || "unknown",
+          }, PANEL_ORIGIN);
+          log("Re-extraction complete, method:", method);
+        } else {
+          iframe.contentWindow.postMessage({
+            type: "ALTAANA_GARMENT_IMAGE",
+            garmentImageBase64: null,
+            extractionMethod: "none",
+            sourceUrl: null,
+            fetchStatus: "skipped",
+          }, PANEL_ORIGIN);
+          log("Re-extraction: no garment image found");
+        }
+      })();
     }
   });
 }

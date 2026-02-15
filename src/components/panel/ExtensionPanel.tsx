@@ -68,6 +68,7 @@ const ExtensionPanel = () => {
   const [garmentImageBase64, setGarmentImageBase64] = useState<string | null>(null);
   const [garmentSourceUrl, setGarmentSourceUrl] = useState<string | null>(null);
   const [garmentExtractionMethod, setGarmentExtractionMethod] = useState<string>("unknown");
+  const [garmentFetchStatus, setGarmentFetchStatus] = useState<string>("unknown");
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -83,6 +84,7 @@ const ExtensionPanel = () => {
         setGarmentImageBase64(event.data.garmentImageBase64 || null);
         setGarmentSourceUrl(event.data.sourceUrl || null);
         setGarmentExtractionMethod(event.data.extractionMethod || "unknown");
+        setGarmentFetchStatus(event.data.fetchStatus || "unknown");
       }
     };
     window.addEventListener("message", handler);
@@ -299,6 +301,7 @@ const ExtensionPanel = () => {
             garmentImageBase64={garmentImageBase64}
             garmentImageSourceUrl={garmentSourceUrl}
             extractionMethod={garmentExtractionMethod}
+            fetchStatus={garmentFetchStatus}
             category={target.category}
             onBack={() => setPanelState("confirmed")}
           />
