@@ -1,94 +1,128 @@
 
 
-# Make VTO Pipeline Robust and Defensive
+# Robust Garment Image Extraction Pipeline
 
 ## Problem
-The error "can only concatenate str (not 'NoneType') to str" is caused by null/undefined values flowing through string operations in both the frontend payload and the edge function.
+The content script's `extractGarmentImage()` and `captureImageAsBase64()` are too simplistic -- they miss common PDP gallery patterns, don't parse `srcset`, don't normalize URLs, and don't convert AVIF/WEBP formats. When extraction fails, there's no debug visibility.
 
 ## Changes
 
-### 1. Content Script (`extension/content.js`)
-- In `extractGarmentImage()`, track which method succeeded and return it alongside the URL
-- In `captureImageAsBase64()`, the `method` field already returns proper strings ("dom_canvas", "fetch_canvas", "failed")
-- In the postMessage, ensure `extractionMethod` combines both: e.g. "og_image" (source) + capture method
-- When no garment image is found at all, send `extractionMethod: "none"` (never null/undefined)
+### 1. Content Script (`extension/content.js`) -- Major Overhaul
 
-### 2. ExtensionPanel (`src/components/panel/ExtensionPanel.tsx`)
-- Default `garmentExtractionMethod` to `"unknown"` instead of `undefined`
-- In the postMessage handler, coalesce: `event.data.extractionMethod || "unknown"`
+**A) Enhanced `extractGarmentImage()` with priority order:**
 
-### 3. VTOScreen (`src/components/panel/screens/VTOScreen.tsx`)
-- Default `extractionMethod` prop to `"unknown"` via destructuring default
-- Before calling `startPrediction`, validate that personPhoto and at least one garment source exist; if not, show a toast and block the call
-- In error detail display, use `??` for all optional fields
-- Add a dev-mode "Self-test" button that sends two tiny built-in sample base64 images to the edge function
+1. Gallery-scoped DOM images first: search inside `[data-testid*="gallery"]`, `.product-gallery`, `.carousel`, `.pdp-gallery`, `.product-images`, `[class*="product-image"]` for the largest `<img>` with width > 250 and height > 250
+2. Largest visible `<img>` in viewport: filter out icons/logos (skip imgs inside `nav`, `header`, `footer`, `[class*="logo"]`, `[class*="icon"]`); require naturalWidth > 250 and naturalHeight > 250
+3. `og:image` meta tag
+4. `twitter:image` meta tag
+5. JSON-LD Product image (existing)
 
-### 4. useVirtualTryOn Hook (`src/hooks/useVirtualTryOn.ts`)
-- Coalesce `category` to `"unknown"` in the request body
-- Use `?? null` or `?? "unknown"` for all optional fields in the request body and console logs
+**For the chosen img, resolve URL via:**
+- `img.currentSrc` (handles responsive loading)
+- Then `img.src`
+- Then parse `srcset` for largest candidate (new helper `parseSrcsetLargest()`)
 
-### 5. Edge Function (`supabase/functions/virtual-tryon/index.ts`)
-- Coalesce all optional fields from the request body:
-  ```typescript
-  const extractionMethod = body.extractionMethod ?? "unknown";
-  const garmentType = body.garmentType ?? "unknown";
-  const category = body.category ?? "unknown";
-  ```
-- Remove any string concatenation that could include a null (e.g., in log statements or error messages, use template literals with `?? "unknown"`)
-- Wrap the Replicate API call in a dedicated try/catch that returns HTTP 502 with `{ ok: false, error, debugInfo }` on failure
-- On image validation failure, return HTTP 400 with `{ ok: false, error, debugInfo: { extractionMethod, userSizeKB, garmentSizeKB } }`
-- Add `ok: true` to success responses for consistency
+**URL normalization:**
+- Protocol-relative `//` to `https://`
+- Relative paths resolved against `location.origin`
 
-## Technical Details
+**Returns `{ url, source }` where source is `"gallery_img"`, `"largest_img"`, `"og_image"`, `"twitter_image"`, `"json_ld"`, or `"none"`**
 
-### Content script extraction method tracking
+**B) Enhanced `captureImageAsBase64()` with format handling:**
 
-Update `extractGarmentImage()` to return `{ url, source }` where source is one of: `"og_image"`, `"product_image"`, `"json_ld"`, `"largest_img"`, or `null`. Then combine with the capture method in the postMessage:
+1. DOM canvas capture (existing) -- but output as JPEG at 0.92 quality instead of PNG for smaller size
+2. CORS fetch as blob -- check `blob.type`; if `image/avif` or `image/webp`, convert via canvas to JPEG before encoding
+3. If security error on canvas, return `{ base64: null, method: "canvas_security_error" }`
 
-```javascript
-// Before:
-extractionMethod: result.method  // could be "failed" or capture method only
+**New helpers:**
+- `parseSrcsetLargest(srcset)` -- parse srcset attribute, return URL of largest width descriptor
+- `normalizeImageUrl(url)` -- protocol-relative and relative URL resolution
+- Format detection already handled by canvas `toDataURL("image/jpeg", 0.92)`
 
-// After:
-extractionMethod: result.base64
-  ? (garmentSource + "/" + result.method)  // e.g. "og_image/dom_canvas"
-  : (garmentSource ? garmentSource + "/cors_blocked" : "none")
-```
+### 2. VTOScreen (`src/components/panel/screens/VTOScreen.tsx`)
 
-### Edge function Replicate try/catch
+**Collapsed debug panel (no UI redesign):**
+- Below the existing privacy notice, add a collapsible section showing:
+  - `extractionMethod`
+  - `garmentSourceUrl` (detected URL)
+  - Garment image size in KB (if base64 available)
+  - Person photo size in KB
+- Use existing Collapsible component from `@radix-ui/react-collapsible`
+- Only visible in dev mode (`import.meta.env.DEV`)
 
-```typescript
-let replicateResponse;
-try {
-  replicateResponse = await fetch(REPLICATE_API_URL, { ... });
-} catch (err) {
-  return new Response(JSON.stringify({
-    ok: false,
-    error: "Replicate request failed",
-    debugInfo: { status: 0, message: (err as Error).message, extractionMethod }
-  }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-}
-const data = await replicateResponse.json();
-if (!replicateResponse.ok) {
-  return new Response(JSON.stringify({
-    ok: false,
-    error: data?.detail ?? "Failed to start prediction",
-    debugInfo: { status: replicateResponse.status, extractionMethod }
-  }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-}
-```
+**"Test extraction" button (dev mode only):**
+- Next to existing "Self-test backend" button
+- Sends a postMessage to parent requesting extraction re-run
+- Displays detected URL + preview + method in a toast or inline
 
-### Self-test button (dev mode only)
+**Payload validation (already partially done, strengthen):**
+- Before calling `startPrediction`, verify `personPhoto` starts with `data:image/`
+- If garment base64 exists, verify it starts with `data:image/`
+- Block and toast if validation fails
 
-A small button rendered at the bottom of VTOScreen when `import.meta.env.DEV` is true. It sends two hardcoded 1x1 pixel PNG base64 strings to the edge function and toasts success/failure. This validates the Replicate token and request path without needing real images.
+### 3. ExtensionPanel (`src/components/panel/ExtensionPanel.tsx`)
+
+- No changes needed -- already stores `garmentSourceUrl` and `garmentExtractionMethod` from postMessage and passes them to VTOScreen.
+
+### 4. Edge Function (`supabase/functions/virtual-tryon/index.ts`)
+
+- No changes needed -- already has defensive coalescing, validation, and try/catch wrapping from the previous implementation.
+
+### 5. useVirtualTryOn Hook (`src/hooks/useVirtualTryOn.ts`)
+
+- No changes needed -- already coalesces all optional fields.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `extension/content.js` | Return extraction source from `extractGarmentImage()`, combine with capture method, never send null extractionMethod |
-| `src/components/panel/ExtensionPanel.tsx` | Default `garmentExtractionMethod` to `"unknown"`, coalesce in handler |
-| `src/components/panel/screens/VTOScreen.tsx` | Default prop, validate before calling backend, safe `??` everywhere, add self-test button |
-| `src/hooks/useVirtualTryOn.ts` | Coalesce all optional fields in request body |
-| `supabase/functions/virtual-tryon/index.ts` | Coalesce all body fields, wrap Replicate in try/catch with 502, return `ok` field and `debugInfo`, safe template literals |
+| `extension/content.js` | Overhaul `extractGarmentImage()` with gallery selectors, size thresholds, srcset parsing, URL normalization. Enhance `captureImageAsBase64()` with JPEG output and AVIF/WEBP conversion. Add `parseSrcsetLargest()` and `normalizeImageUrl()` helpers. |
+| `src/components/panel/screens/VTOScreen.tsx` | Add dev-mode collapsed debug panel showing extraction details. Add "Test extraction" button. Strengthen payload validation. |
+
+## Technical Details
+
+### srcset parsing helper
+
+```text
+function parseSrcsetLargest(srcset):
+  Split by comma, trim each entry
+  For each entry: split by space, get URL and descriptor
+  Parse descriptors ending in "w" as width values
+  Return URL with largest width, or first URL if no width descriptors
+```
+
+### Gallery selector priority list
+
+```text
+const GALLERY_SELECTORS = [
+  '[data-testid*="gallery"]',
+  '.product-gallery',
+  '.pdp-gallery',
+  '.product-images',
+  '[class*="product-image"]',
+  '[class*="pdp-image"]',
+  '.carousel',
+  '[class*="carousel"]',
+  '[class*="slider"]',
+  '[class*="swiper"]',
+];
+```
+
+### Icon/logo exclusion for largest-img fallback
+
+```text
+Skip images inside: nav, header, footer, [class*="logo"], [class*="icon"],
+  [class*="badge"], [class*="banner"], [class*="promo"], [class*="recommend"],
+  [class*="similar"], [class*="also-like"]
+```
+
+### Debug panel fields
+
+```text
+- Extraction method: "og_image/dom_canvas"
+- Source URL: https://cdn.shopify.com/...
+- Garment size: 342 KB
+- Person photo: 128 KB
+- Fetch status: ok | cors_blocked | canvas_security_error | skipped
+```
 
