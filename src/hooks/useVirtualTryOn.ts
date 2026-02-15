@@ -46,29 +46,37 @@ export function useVirtualTryOn() {
 
   const startPrediction = useCallback(async (
     personImageBase64: string,
-    garmentImageBase64: string,
+    garmentImageBase64: string | null,
     category?: string,
+    garmentImageUrl?: string,
   ) => {
     cleanup();
     setState({ status: "starting", outputImageUrl: null, error: null, predictionId: null });
 
     console.log("[VTO] Starting prediction", {
-      garmentImageBase64Length: garmentImageBase64.length,
-      garmentImageApproxKB: Math.round(garmentImageBase64.length * 0.75 / 1024),
+      garmentImageBase64Length: garmentImageBase64?.length ?? 0,
+      garmentImageApproxKB: garmentImageBase64 ? Math.round(garmentImageBase64.length * 0.75 / 1024) : 0,
+      garmentImageUrl: garmentImageUrl ?? null,
       personImageBase64Length: personImageBase64.length,
       personImageApproxKB: Math.round(personImageBase64.length * 0.75 / 1024),
       category,
     });
 
     try {
+      const requestBody: Record<string, unknown> = {
+        person_image_base64: personImageBase64,
+        category,
+      };
+      if (garmentImageBase64) {
+        requestBody.garment_image_base64 = garmentImageBase64;
+      } else if (garmentImageUrl) {
+        requestBody.garment_image_url = garmentImageUrl;
+      }
+
       const res = await fetch(BASE_URL, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          person_image_base64: personImageBase64,
-          garment_image_base64: garmentImageBase64,
-          category,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const body = await res.json().catch(() => ({}));

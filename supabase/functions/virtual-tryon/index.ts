@@ -31,6 +31,38 @@ async function uploadToSupabaseStorage(base64DataUri: string, filename: string):
   return `${supabaseUrl}/storage/v1/object/public/vto-temp/${filename}`;
 }
 
+// Fetch an image from a URL server-side and upload to Supabase Storage
+async function fetchAndUploadFromUrl(imageUrl: string, filename: string): Promise<string> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+  const response = await fetch(imageUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; Altaana/1.0)",
+      "Accept": "image/*",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  const contentType = response.headers.get("content-type") || "image/jpeg";
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey);
+  const { error } = await supabase.storage
+    .from("vto-temp")
+    .upload(filename, bytes, { contentType, upsert: true });
+
+  if (error) {
+    throw new Error(`Storage upload failed: ${error.message}`);
+  }
+
+  return `${supabaseUrl}/storage/v1/object/public/vto-temp/${filename}`;
+}
+
 // Map ALTAANA categories to IDM-VTON categories
 function mapCategory(cat?: string): string {
   if (!cat) return "upper_body";
@@ -114,16 +146,23 @@ Deno.serve(async (req) => {
     // ── POST: Start a new prediction ──
     if (req.method === "POST") {
       const body = await req.json();
-      const { person_image_base64, garment_image_base64, category } = body;
+      const { person_image_base64, garment_image_base64, garment_image_url, category } = body;
 
-      if (!person_image_base64 || !garment_image_base64) {
-        return new Response(JSON.stringify({ error: "person_image_base64 and garment_image_base64 required" }), {
+      if (!person_image_base64) {
+        return new Response(JSON.stringify({ error: "person_image_base64 required" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      // Validate both images
+      if (!garment_image_base64 && !garment_image_url) {
+        return new Response(JSON.stringify({ error: "garment_image_base64 or garment_image_url required" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Validate person image (always base64)
       try {
         validateImageBase64(person_image_base64, "person_image_base64");
       } catch (err) {
@@ -134,35 +173,41 @@ Deno.serve(async (req) => {
         });
       }
 
-      try {
-        validateImageBase64(garment_image_base64, "garment_image_base64");
-      } catch (err) {
-        console.error("[virtual-tryon] Garment image validation failed:", JSON.stringify(err));
-        return new Response(JSON.stringify({ error: `Invalid garment image: ${(err as Record<string, unknown>).reason}`, detail: err }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+      // Validate garment base64 if provided
+      if (garment_image_base64) {
+        try {
+          validateImageBase64(garment_image_base64, "garment_image_base64");
+        } catch (err) {
+          console.error("[virtual-tryon] Garment image validation failed:", JSON.stringify(err));
+          return new Response(JSON.stringify({ error: `Invalid garment image: ${(err as Record<string, unknown>).reason}`, detail: err }), {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
       }
 
-      console.log("[virtual-tryon] Images validated OK", {
+      console.log("[virtual-tryon] Input accepted", {
         personApproxKB: Math.round(person_image_base64.length * 0.75 / 1024),
-        garmentApproxKB: Math.round(garment_image_base64.length * 0.75 / 1024),
+        garmentSource: garment_image_base64 ? "base64" : "url",
+        garmentUrl: garment_image_url || null,
       });
 
-      // Size check (~5MB limit each)
+      // Size check for person image (~5MB limit)
       const personSizeBytes = (person_image_base64.length * 3) / 4;
-      const garmentSizeBytes = (garment_image_base64.length * 3) / 4;
       if (personSizeBytes > 5 * 1024 * 1024) {
         return new Response(JSON.stringify({ error: "Person image too large. Max 5MB." }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      if (garmentSizeBytes > 5 * 1024 * 1024) {
-        return new Response(JSON.stringify({ error: "Garment image too large. Max 5MB." }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+      if (garment_image_base64) {
+        const garmentSizeBytes = (garment_image_base64.length * 3) / 4;
+        if (garmentSizeBytes > 5 * 1024 * 1024) {
+          return new Response(JSON.stringify({ error: "Garment image too large. Max 5MB." }), {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
       }
 
       const vtonCategory = mapCategory(category);
@@ -185,13 +230,19 @@ Deno.serve(async (req) => {
         });
       }
 
+      // Upload garment: base64 path or URL fetch path
       try {
-        console.log("[virtual-tryon] Uploading garment image to storage...");
-        garmentPublicUrl = await uploadToSupabaseStorage(garment_image_base64, garmentFilename);
-        console.log("[virtual-tryon] Garment image uploaded:", garmentPublicUrl);
+        if (garment_image_base64) {
+          console.log("[virtual-tryon] Uploading garment image from base64...");
+          garmentPublicUrl = await uploadToSupabaseStorage(garment_image_base64, garmentFilename);
+        } else {
+          console.log("[virtual-tryon] Fetching garment image from URL:", garment_image_url);
+          garmentPublicUrl = await fetchAndUploadFromUrl(garment_image_url, garmentFilename);
+        }
+        console.log("[virtual-tryon] Garment image ready:", garmentPublicUrl);
       } catch (err) {
-        console.error("[virtual-tryon] Garment image upload failed:", (err as Error).message);
-        return new Response(JSON.stringify({ error: `Failed to upload garment image: ${(err as Error).message}` }), {
+        console.error("[virtual-tryon] Garment image processing failed:", (err as Error).message);
+        return new Response(JSON.stringify({ error: `Failed to process garment image: ${(err as Error).message}` }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });

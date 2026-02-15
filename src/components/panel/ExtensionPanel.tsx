@@ -64,8 +64,9 @@ const ExtensionPanel = () => {
   const [, setProfile] = useState<UserProfile | null>(null);
   const [confirmedSize, setConfirmedSize] = useState<string | null>(cached?.size || null);
 
-  // ── Garment base64 from content script postMessage ──
+  // ── Garment base64 + source URL from content script postMessage ──
   const [garmentImageBase64, setGarmentImageBase64] = useState<string | null>(null);
+  const [garmentSourceUrl, setGarmentSourceUrl] = useState<string | null>(null);
   const [garmentExtractionMethod, setGarmentExtractionMethod] = useState<string | undefined>(undefined);
 
   useEffect(() => {
@@ -80,6 +81,7 @@ const ExtensionPanel = () => {
             : 0,
         });
         setGarmentImageBase64(event.data.garmentImageBase64 || null);
+        setGarmentSourceUrl(event.data.sourceUrl || null);
         setGarmentExtractionMethod(event.data.extractionMethod);
       }
     };
@@ -295,6 +297,7 @@ const ExtensionPanel = () => {
             key="vto"
             garmentImageUrl={target.garmentImage}
             garmentImageBase64={garmentImageBase64}
+            garmentImageSourceUrl={garmentSourceUrl}
             extractionMethod={garmentExtractionMethod}
             category={target.category}
             onBack={() => setPanelState("confirmed")}
