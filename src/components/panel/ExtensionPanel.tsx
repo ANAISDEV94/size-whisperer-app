@@ -12,6 +12,7 @@ import AnalyzingScreen from "./screens/AnalyzingScreen";
 import RecommendationScreen from "./screens/RecommendationScreen";
 import ConfirmedScreen from "./screens/ConfirmedScreen";
 import NeedMoreInfoScreen from "./screens/NeedMoreInfoScreen";
+import VTOScreen from "./screens/VTOScreen";
 
 // ── Read target brand from URL params ───────────────────────────
 function useTargetBrand() {
@@ -22,6 +23,7 @@ function useTargetBrand() {
       category: params.get("category") || "tops",
       productUrl: params.get("url") || undefined,
       brandSource: params.get("brand_source") || "domain",
+      garmentImage: params.get("garment_image") || null,
     };
   }, []);
 }
@@ -263,6 +265,16 @@ const ExtensionPanel = () => {
             key="confirmed"
             recommendation={confirmedRecommendation}
             onAddToCart={handleAddToCart}
+            onTryItOn={() => setPanelState("vto")}
+          />
+        );
+      case "vto":
+        return (
+          <VTOScreen
+            key="vto"
+            garmentImageUrl={target.garmentImage}
+            category={target.category}
+            onBack={() => setPanelState("confirmed")}
           />
         );
       default:

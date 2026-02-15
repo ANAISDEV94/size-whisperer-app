@@ -6,9 +6,10 @@ import type { SizeRecommendation } from "@/types/panel";
 interface ConfirmedScreenProps {
   recommendation: SizeRecommendation;
   onAddToCart: () => void;
+  onTryItOn?: () => void;
 }
 
-const ConfirmedScreen = ({ recommendation, onAddToCart }: ConfirmedScreenProps) => {
+const ConfirmedScreen = ({ recommendation, onAddToCart, onTryItOn }: ConfirmedScreenProps) => {
   const [whyExpanded, setWhyExpanded] = useState(false);
   const [compareExpanded, setCompareExpanded] = useState(false);
 
@@ -37,15 +38,25 @@ const ConfirmedScreen = ({ recommendation, onAddToCart }: ConfirmedScreenProps) 
 
       <Button
         onClick={() => {
-          // Tell the host page (via content script) to scroll to the size selector
+          if (onTryItOn) {
+            onTryItOn();
+          }
+        }}
+        className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-full text-sm mb-3 mx-auto"
+        style={{ height: 48.5, width: 334 }}
+      >
+        Try It On
+      </Button>
+
+      <button
+        onClick={() => {
           window.parent.postMessage({ type: "ALTAANA_SCROLL_TO_SIZE" }, "*");
           onAddToCart();
         }}
-        className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-full text-sm mb-6 mx-auto"
-        style={{ height: 48.5, width: 334 }}
+        className="text-xs text-muted-foreground underline text-center block mx-auto mb-6"
       >
-        Go to size selector
-      </Button>
+        or go to size selector
+      </button>
 
       {/* Why this recommendation */}
       <button
