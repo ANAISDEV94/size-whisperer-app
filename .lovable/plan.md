@@ -1,95 +1,77 @@
 
-# Fix Virtual Try-On (VTO) -- Three Root Causes
 
-## Problems Identified
+# Fix VTO Error Visibility and Add Debug Logging
 
-From the screenshot and edge function logs, three issues are preventing VTO from working:
+## Problem
 
-### Issue 1: Replicate cannot fetch retailer garment images
-The error `"cannot identify image file '/tmp/tmpj26m1uxrLOVF-WD4350'"` means Replicate's servers tried to download the garment image URL (e.g., from loversandfriends.us) but got blocked by CDN anti-hotlinking, redirects, or Cloudflare protection. Replicate received HTML/garbage instead of an image.
-
-**Fix:** The edge function must download the garment image server-side and convert it to a base64 data URI before passing it to Replicate. This way both images go to Replicate as base64, bypassing any CDN restrictions.
-
-### Issue 2: Garment image not rendering in the panel
-The `<img>` tag in VTOScreen shows broken alt text "Product garment". This is likely the same root cause -- the garment URL from the retailer CDN blocks cross-origin requests from the extension iframe.
-
-**Fix:** This is cosmetic and lower priority since the image will work once VTO generates. But we can add an `onError` fallback that shows "Image detected but preview unavailable" instead of a broken image icon.
-
-### Issue 3: Replicate model version may be invalid
-The logs show `"The specified version does not exist"`. While the version hash `0513734a...` appears on the Replicate docs, the API now supports using `model` field with `owner/name` format instead of `version` field, which is more resilient to version deprecation.
-
-**Fix:** Switch from `version`-based API to `model`-based API format: `"model": "cuuupid/idm-vton"` instead of `"version": "0513734a..."`.
-
----
+When the edge function returns a non-2xx status (e.g., 422 from Replicate), the Supabase JS client throws a generic error: `"Edge Function returned a non-2xx status code"`. The actual JSON body with status code and error details is discarded, making debugging impossible from the UI.
 
 ## Changes
 
-### 1. Edge function: `supabase/functions/virtual-tryon/index.ts`
+### 1. `src/hooks/useVirtualTryOn.ts` -- Extract full error details
 
-- **Proxy the garment image**: On POST, fetch the garment_image_url server-side, convert to base64, and send both images as data URIs to Replicate
-- **Switch to model-based API**: Use `"model": "cuuupid/idm-vton"` instead of `"version": "0513..."` for more stable model resolution
-- **Add User-Agent header** when fetching the garment image to avoid bot-detection blocks
-- **Add error handling** if the garment image fetch fails (return a clear error: "Could not load garment image")
-- **Add size limit** for the garment image (5MB max)
+The Supabase `functions.invoke` method returns `{ data, error }`. When the edge function returns non-2xx, `error` is a `FunctionsHttpError` that contains the response context, but `data` may still hold the parsed JSON body. The fix:
 
-### 2. Frontend: `src/components/panel/screens/VTOScreen.tsx`
+- Check if `error` exists and if `data` contains an `error` or `detail` field from the edge function's JSON response
+- If the Supabase client swallows the body, switch to using raw `fetch` instead of `supabase.functions.invoke` for the POST call so we can read the response status and body directly
+- Build a detailed error string: `"[HTTP {status}] {error message from JSON}"` and set it in state
+- Add `console.log` before the POST call logging:
+  - `garmentImageUrl` value
+  - `personImageBase64` length (in characters and approx KB)
+  - `category` value
 
-- Add `onError` handler to the garment `<img>` tag that shows a fallback message ("Image detected -- preview unavailable") instead of a broken icon
-- This handles cases where retailer CDNs block cross-origin image loading in the iframe
+### 2. `src/components/panel/screens/VTOScreen.tsx` -- Show full error in banner
 
-### 3. Frontend: `src/hooks/useVirtualTryOn.ts`
+The error banner already exists (lines ~131-135). Update it to:
 
-- No changes needed -- the polling logic is correct
+- Display the full error string (which now includes status code and server message)
+- Use `whitespace-pre-wrap` so multi-line errors render properly
+- No layout changes otherwise
 
-### 4. Extension: `extension/content.js`
+### 3. Specific code approach for the hook
 
-- No changes needed -- the garment extraction logic is working (it found the URL)
+Replace `supabase.functions.invoke` with a direct `fetch` call for the POST endpoint. This gives us full control over response handling:
 
----
+```
+const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/virtual-tryon`;
+const res = await fetch(url, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+    "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+  },
+  body: JSON.stringify({ ... }),
+});
 
-## Technical Details
-
-### Garment image proxy flow (edge function)
-
-```text
-Client POST:
-  person_image_base64: "data:image/jpeg;base64,..."
-  garment_image_url: "https://cdn.loversandfriends.us/product.jpg"
-
-Edge function:
-  1. Fetch garment_image_url with User-Agent header
-  2. Read response as ArrayBuffer
-  3. Convert to base64 data URI
-  4. Send both as data URIs to Replicate:
-     human_img: "data:image/jpeg;base64,..."  (from client)
-     garm_img: "data:image/jpeg;base64,..."   (proxied)
-
-Replicate:
-  - Receives both images as base64 -- no external fetching needed
-  - No CDN blocking possible
+if (!res.ok) {
+  const body = await res.json().catch(() => ({}));
+  const detail = body.error || body.detail || JSON.stringify(body);
+  setState({ status: "failed", error: `[${res.status}] ${detail}`, ... });
+  return;
+}
 ```
 
-### Model API change
+Same approach for the GET poll call -- switch to raw fetch so we can surface errors.
 
-Before:
-```json
-{ "version": "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985", "input": { ... } }
+### 4. Console debug logging
+
+Add before the fetch call:
+```
+console.log("[VTO] Starting prediction", {
+  garmentImageUrl,
+  personImageBase64Length: personImageBase64.length,
+  personImageApproxKB: Math.round(personImageBase64.length * 0.75 / 1024),
+  category,
+});
 ```
 
-After:
-```json
-{ "model": "cuuupid/idm-vton", "input": { ... } }
-```
-
-This uses Replicate's newer model-based prediction API which automatically resolves to the latest version.
-
----
-
-## Files Changed
+## Files Modified
 
 | File | Change |
 |------|--------|
-| `supabase/functions/virtual-tryon/index.ts` | Proxy garment image as base64, switch to model-based API |
-| `src/components/panel/screens/VTOScreen.tsx` | Add onError fallback for garment image preview |
+| `src/hooks/useVirtualTryOn.ts` | Replace `supabase.functions.invoke` with raw `fetch`, extract full error details, add console logging |
+| `src/components/panel/screens/VTOScreen.tsx` | Add `whitespace-pre-wrap` to error banner text |
 
-No UI layout changes. No changes to sizing logic.
+No backend or extension changes needed.
+
