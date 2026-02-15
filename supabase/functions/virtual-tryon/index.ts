@@ -11,40 +11,31 @@ function mapCategory(cat?: string): string {
   return "upper_body";
 }
 
-// Fetch a remote image and return it as a base64 data URI
-async function fetchImageAsDataUri(imageUrl: string): Promise<string> {
-  const res = await fetch(imageUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
-    },
-  });
-
-  if (!res.ok) {
-    throw new Error(`Failed to fetch garment image: ${res.status} ${res.statusText}`);
+// Validate base64 data URI: check format and magic bytes
+function validateImageBase64(base64: string, fieldName: string) {
+  if (!base64) {
+    throw { field: fieldName, reason: "missing" };
   }
 
-  const buf = await res.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-
-  if (bytes.length > 5 * 1024 * 1024) {
-    throw new Error("Garment image too large (max 5MB)");
+  const match = base64.match(/^data:image\/(png|jpeg|jpg|webp);base64,/);
+  if (!match) {
+    throw { field: fieldName, reason: "not a valid image data URI", snippet: base64.substring(0, 80) };
   }
 
-  // Detect content type
-  const ct = res.headers.get("content-type") || "";
-  const mime = ct.startsWith("image/") ? ct.split(";")[0] : "image/jpeg";
-
-  // Convert to base64
-  let binary = "";
-  const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-    for (let j = 0; j < chunk.length; j++) {
-      binary += String.fromCharCode(chunk[j]);
-    }
+  const raw = base64.split(",")[1];
+  if (!raw || raw.length < 16) {
+    throw { field: fieldName, reason: "base64 payload too short" };
   }
-  return `data:${mime};base64,${btoa(binary)}`;
+
+  // Decode first 16 bytes and check magic bytes
+  const decoded = Uint8Array.from(atob(raw.substring(0, 24)), c => c.charCodeAt(0));
+  const isPNG = decoded[0] === 137 && decoded[1] === 80 && decoded[2] === 78 && decoded[3] === 71;
+  const isJPEG = decoded[0] === 255 && decoded[1] === 216;
+  const isWEBP = decoded[0] === 82 && decoded[1] === 73 && decoded[2] === 70 && decoded[3] === 70; // RIFF
+
+  if (!isPNG && !isJPEG && !isWEBP) {
+    throw { field: fieldName, reason: "invalid magic bytes — not PNG/JPEG/WEBP", detected: Array.from(decoded.slice(0, 4)) };
+  }
 }
 
 Deno.serve(async (req) => {
@@ -95,38 +86,55 @@ Deno.serve(async (req) => {
     // ── POST: Start a new prediction ──
     if (req.method === "POST") {
       const body = await req.json();
-      const { person_image_base64, garment_image_url, category } = body;
+      const { person_image_base64, garment_image_base64, category } = body;
 
-      if (!person_image_base64 || !garment_image_url) {
-        return new Response(JSON.stringify({ error: "person_image_base64 and garment_image_url required" }), {
+      if (!person_image_base64 || !garment_image_base64) {
+        return new Response(JSON.stringify({ error: "person_image_base64 and garment_image_base64 required" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      // Validate person image size (~5MB limit)
-      const sizeBytes = (person_image_base64.length * 3) / 4;
-      if (sizeBytes > 5 * 1024 * 1024) {
-        return new Response(JSON.stringify({ error: "Image too large. Max 5MB." }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      // Ensure person image has data URI prefix
-      const personImg = person_image_base64.startsWith("data:")
-        ? person_image_base64
-        : `data:image/jpeg;base64,${person_image_base64}`;
-
-      // Proxy garment image: fetch server-side and convert to base64
-      let garmentImg: string;
+      // Validate both images
       try {
-        console.log("[virtual-tryon] Fetching garment image:", garment_image_url);
-        garmentImg = await fetchImageAsDataUri(garment_image_url);
-        console.log("[virtual-tryon] Garment image proxied successfully, length:", garmentImg.length);
+        validateImageBase64(person_image_base64, "person_image_base64");
       } catch (err) {
-        console.error("[virtual-tryon] Garment fetch error:", err);
-        return new Response(JSON.stringify({ error: "Could not load garment image. The retailer may be blocking access." }), {
+        console.error("[virtual-tryon] Person image validation failed:", JSON.stringify(err));
+        return new Response(JSON.stringify({ error: `Invalid person image: ${(err as Record<string, unknown>).reason}`, detail: err }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        validateImageBase64(garment_image_base64, "garment_image_base64");
+      } catch (err) {
+        console.error("[virtual-tryon] Garment image validation failed:", JSON.stringify(err));
+        return new Response(JSON.stringify({ error: `Invalid garment image: ${(err as Record<string, unknown>).reason}`, detail: err }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Log sizes only, never full base64
+      console.log("[virtual-tryon] Images validated OK", {
+        personLength: person_image_base64.length,
+        personApproxKB: Math.round(person_image_base64.length * 0.75 / 1024),
+        garmentLength: garment_image_base64.length,
+        garmentApproxKB: Math.round(garment_image_base64.length * 0.75 / 1024),
+      });
+
+      // Size check (~5MB limit each)
+      const personSizeBytes = (person_image_base64.length * 3) / 4;
+      const garmentSizeBytes = (garment_image_base64.length * 3) / 4;
+      if (personSizeBytes > 5 * 1024 * 1024) {
+        return new Response(JSON.stringify({ error: "Person image too large. Max 5MB." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (garmentSizeBytes > 5 * 1024 * 1024) {
+        return new Response(JSON.stringify({ error: "Garment image too large. Max 5MB." }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -143,8 +151,8 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           version: "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
           input: {
-            human_img: personImg,
-            garm_img: garmentImg,
+            human_img: person_image_base64,
+            garm_img: garment_image_base64,
             category: vtonCategory,
           },
         }),

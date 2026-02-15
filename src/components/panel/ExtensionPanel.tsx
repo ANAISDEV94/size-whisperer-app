@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { PanelState, UserProfile, SizeRecommendation } from "@/types/panel";
 import { useAuth } from "@/hooks/useAuth";
@@ -64,6 +64,29 @@ const ExtensionPanel = () => {
   const [, setProfile] = useState<UserProfile | null>(null);
   const [confirmedSize, setConfirmedSize] = useState<string | null>(cached?.size || null);
 
+  // ── Garment base64 from content script postMessage ──
+  const [garmentImageBase64, setGarmentImageBase64] = useState<string | null>(null);
+  const [garmentExtractionMethod, setGarmentExtractionMethod] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === "ALTAANA_GARMENT_IMAGE") {
+        console.log("[Altaana][panel] Received garment image via postMessage", {
+          method: event.data.extractionMethod,
+          hasBase64: !!event.data.garmentImageBase64,
+          sourceUrl: event.data.sourceUrl,
+          sizeKB: event.data.garmentImageBase64
+            ? Math.round(event.data.garmentImageBase64.length * 0.75 / 1024)
+            : 0,
+        });
+        setGarmentImageBase64(event.data.garmentImageBase64 || null);
+        setGarmentExtractionMethod(event.data.extractionMethod);
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
   const isGuest = typeof window !== 'undefined' && localStorage.getItem('altaana_guest_session') === 'true';
 
   const notifyParentResize = useCallback((mode: "panel" | "widget") => {
@@ -73,7 +96,6 @@ const ExtensionPanel = () => {
   }, []);
 
   const handleOpen = useCallback(() => {
-    // Always open the single shell; set initial screen based on auth state
     if (!user && !isGuest) {
       setPanelState("auth");
     } else {
@@ -222,7 +244,6 @@ const ExtensionPanel = () => {
         if (!recommendation) {
           return <AnalyzingScreen key="analyzing-fallback" />;
         }
-        // Show "Need more info" if confidence is low
         if (recommendation.needMoreInfo) {
           return (
             <NeedMoreInfoScreen
@@ -273,6 +294,8 @@ const ExtensionPanel = () => {
           <VTOScreen
             key="vto"
             garmentImageUrl={target.garmentImage}
+            garmentImageBase64={garmentImageBase64}
+            extractionMethod={garmentExtractionMethod}
             category={target.category}
             onBack={() => setPanelState("confirmed")}
           />
