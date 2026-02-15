@@ -1,10 +1,10 @@
 import { corsHeaders } from "../_shared/cors.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const REPLICATE_API_URL = "https://api.replicate.com/v1/predictions";
-const REPLICATE_FILES_URL = "https://api.replicate.com/v1/files";
 
-// Upload a base64 data URI to Replicate's Files API, return the hosted URL
-async function uploadToReplicateFiles(base64DataUri: string, filename: string, token: string): Promise<string> {
+// Upload a base64 data URI to Supabase Storage, return a public URL
+async function uploadToSupabaseStorage(base64DataUri: string, filename: string): Promise<string> {
   const match = base64DataUri.match(/^data:(image\/\w+);base64,(.+)$/);
   if (!match) throw new Error("Invalid data URI format");
 
@@ -16,23 +16,19 @@ async function uploadToReplicateFiles(base64DataUri: string, filename: string, t
     bytes[i] = binaryString.charCodeAt(i);
   }
 
-  const blob = new Blob([bytes], { type: mimeType });
-  const formData = new FormData();
-  formData.append("content", blob, filename);
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-  const res = await fetch(REPLICATE_FILES_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: formData,
-  });
+  const { error } = await supabase.storage
+    .from("vto-temp")
+    .upload(filename, bytes, { contentType: mimeType, upsert: true });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Replicate file upload failed (${res.status}): ${errText}`);
+  if (error) {
+    throw new Error(`Storage upload failed: ${error.message}`);
   }
 
-  const data = await res.json();
-  return data.urls.get;
+  return `${supabaseUrl}/storage/v1/object/public/vto-temp/${filename}`;
 }
 
 // Map ALTAANA categories to IDM-VTON categories
@@ -60,11 +56,10 @@ function validateImageBase64(base64: string, fieldName: string) {
     throw { field: fieldName, reason: "base64 payload too short" };
   }
 
-  // Decode first 16 bytes and check magic bytes
   const decoded = Uint8Array.from(atob(raw.substring(0, 24)), c => c.charCodeAt(0));
   const isPNG = decoded[0] === 137 && decoded[1] === 80 && decoded[2] === 78 && decoded[3] === 71;
   const isJPEG = decoded[0] === 255 && decoded[1] === 216;
-  const isWEBP = decoded[0] === 82 && decoded[1] === 73 && decoded[2] === 70 && decoded[3] === 70; // RIFF
+  const isWEBP = decoded[0] === 82 && decoded[1] === 73 && decoded[2] === 70 && decoded[3] === 70;
 
   if (!isPNG && !isJPEG && !isWEBP) {
     throw { field: fieldName, reason: "invalid magic bytes — not PNG/JPEG/WEBP", detected: Array.from(decoded.slice(0, 4)) };
@@ -149,11 +144,8 @@ Deno.serve(async (req) => {
         });
       }
 
-      // Log sizes only, never full base64
       console.log("[virtual-tryon] Images validated OK", {
-        personLength: person_image_base64.length,
         personApproxKB: Math.round(person_image_base64.length * 0.75 / 1024),
-        garmentLength: garment_image_base64.length,
         garmentApproxKB: Math.round(garment_image_base64.length * 0.75 / 1024),
       });
 
@@ -175,13 +167,16 @@ Deno.serve(async (req) => {
 
       const vtonCategory = mapCategory(category);
 
-      // Upload both images to Replicate Files API to get hosted URLs
-      let personFileUrl: string;
-      let garmentFileUrl: string;
+      // Upload both images to Supabase Storage for public URLs
+      let personPublicUrl: string;
+      let garmentPublicUrl: string;
+      const personFilename = `${crypto.randomUUID()}.png`;
+      const garmentFilename = `${crypto.randomUUID()}.png`;
+
       try {
-        console.log("[virtual-tryon] Uploading person image to Replicate Files...");
-        personFileUrl = await uploadToReplicateFiles(person_image_base64, "person.png", REPLICATE_API_TOKEN);
-        console.log("[virtual-tryon] Person image uploaded OK");
+        console.log("[virtual-tryon] Uploading person image to storage...");
+        personPublicUrl = await uploadToSupabaseStorage(person_image_base64, personFilename);
+        console.log("[virtual-tryon] Person image uploaded:", personPublicUrl);
       } catch (err) {
         console.error("[virtual-tryon] Person image upload failed:", (err as Error).message);
         return new Response(JSON.stringify({ error: `Failed to upload person image: ${(err as Error).message}` }), {
@@ -189,10 +184,11 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+
       try {
-        console.log("[virtual-tryon] Uploading garment image to Replicate Files...");
-        garmentFileUrl = await uploadToReplicateFiles(garment_image_base64, "garment.png", REPLICATE_API_TOKEN);
-        console.log("[virtual-tryon] Garment image uploaded OK");
+        console.log("[virtual-tryon] Uploading garment image to storage...");
+        garmentPublicUrl = await uploadToSupabaseStorage(garment_image_base64, garmentFilename);
+        console.log("[virtual-tryon] Garment image uploaded:", garmentPublicUrl);
       } catch (err) {
         console.error("[virtual-tryon] Garment image upload failed:", (err as Error).message);
         return new Response(JSON.stringify({ error: `Failed to upload garment image: ${(err as Error).message}` }), {
@@ -210,8 +206,8 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           version: "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985",
           input: {
-            human_img: personFileUrl,
-            garm_img: garmentFileUrl,
+            human_img: personPublicUrl,
+            garm_img: garmentPublicUrl,
             category: vtonCategory,
           },
         }),
@@ -226,6 +222,9 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+
+      // Note: temp files are left in storage for Replicate to download.
+      // A scheduled cleanup job can remove old files later.
 
       return new Response(JSON.stringify({ prediction_id: data.id, status: data.status }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
