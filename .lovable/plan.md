@@ -1,91 +1,94 @@
 
 
-# Fix VTO: Server-Side Garment Image Fetching (Eliminate Manual Upload Requirement)
+# Make VTO Pipeline Robust and Defensive
 
 ## Problem
-
-The content script successfully finds the garment image URL (via og:image, JSON-LD, etc.), but the client-side base64 canvas capture fails due to browser CORS restrictions on cross-origin CDN images (e.g., Shopify CDN at cdn.shopify.com). When base64 is null, the VTO screen shows "No garment image detected" and the only option is manual upload -- bad UX.
-
-## Solution
-
-Pass the garment image **URL** to the edge function as a fallback. The edge function fetches the image server-side (no CORS), uploads it to Supabase Storage, and passes the public URL to Replicate. Manual upload remains as a last-resort fallback but is no longer the primary path when auto-capture fails.
+The error "can only concatenate str (not 'NoneType') to str" is caused by null/undefined values flowing through string operations in both the frontend payload and the edge function.
 
 ## Changes
 
 ### 1. Content Script (`extension/content.js`)
-
-Always send the garment image source URL in the postMessage, even when base64 capture fails. Currently it sends `sourceUrl` but the panel doesn't use it for VTO. No major changes needed here -- `sourceUrl` is already sent.
+- In `extractGarmentImage()`, track which method succeeded and return it alongside the URL
+- In `captureImageAsBase64()`, the `method` field already returns proper strings ("dom_canvas", "fetch_canvas", "failed")
+- In the postMessage, ensure `extractionMethod` combines both: e.g. "og_image" (source) + capture method
+- When no garment image is found at all, send `extractionMethod: "none"` (never null/undefined)
 
 ### 2. ExtensionPanel (`src/components/panel/ExtensionPanel.tsx`)
-
-- Store the `sourceUrl` from the postMessage in state (alongside `garmentImageBase64`)
-- Pass it to VTOScreen as a new `garmentImageSourceUrl` prop
+- Default `garmentExtractionMethod` to `"unknown"` instead of `undefined`
+- In the postMessage handler, coalesce: `event.data.extractionMethod || "unknown"`
 
 ### 3. VTOScreen (`src/components/panel/screens/VTOScreen.tsx`)
-
-- Accept `garmentImageSourceUrl` prop
-- When sending to the edge function: if base64 is available, send it as before; if only URL is available, send `garment_image_url` instead
-- Show the garment image preview using the URL when base64 isn't available (for preview only -- the URL may work in an img tag even if canvas capture failed)
-- Remove the prominent "No garment image detected" state when a URL is available
+- Default `extractionMethod` prop to `"unknown"` via destructuring default
+- Before calling `startPrediction`, validate that personPhoto and at least one garment source exist; if not, show a toast and block the call
+- In error detail display, use `??` for all optional fields
+- Add a dev-mode "Self-test" button that sends two tiny built-in sample base64 images to the edge function
 
 ### 4. useVirtualTryOn Hook (`src/hooks/useVirtualTryOn.ts`)
-
-- Update `startPrediction` to accept an optional `garmentImageUrl` parameter
-- Send `garment_image_url` in the POST body when base64 isn't available
+- Coalesce `category` to `"unknown"` in the request body
+- Use `?? null` or `?? "unknown"` for all optional fields in the request body and console logs
 
 ### 5. Edge Function (`supabase/functions/virtual-tryon/index.ts`)
-
-- Accept `garment_image_url` as an alternative to `garment_image_base64`
-- When URL is provided: fetch the image server-side, convert to binary, upload to Supabase Storage, get public URL
-- The person image continues to use base64 (user uploads it directly, so no CORS issue)
-- Add a new helper `fetchImageFromUrl(url)` that downloads the image and returns binary data
-
-## Flow After Fix
-
-```text
-Content script:
-  1. Extract garment URL (og:image, JSON-LD, etc.) -- almost always succeeds
-  2. Attempt base64 capture via canvas -- may fail due to CORS
-  3. Send postMessage with { garmentImageBase64, sourceUrl, extractionMethod }
-
-Panel (VTOScreen):
-  - Has base64? Send garment_image_base64 to edge function (existing path)
-  - No base64 but has URL? Send garment_image_url to edge function (new path)
-  - Neither? Show manual upload fallback (rare edge case)
-
-Edge function:
-  - garment_image_base64 provided? Decode + upload to storage (existing path)
-  - garment_image_url provided? Fetch server-side + upload to storage (new path)
-  - Pass public storage URL to Replicate as garm_img
-```
+- Coalesce all optional fields from the request body:
+  ```typescript
+  const extractionMethod = body.extractionMethod ?? "unknown";
+  const garmentType = body.garmentType ?? "unknown";
+  const category = body.category ?? "unknown";
+  ```
+- Remove any string concatenation that could include a null (e.g., in log statements or error messages, use template literals with `?? "unknown"`)
+- Wrap the Replicate API call in a dedicated try/catch that returns HTTP 502 with `{ ok: false, error, debugInfo }` on failure
+- On image validation failure, return HTTP 400 with `{ ok: false, error, debugInfo: { extractionMethod, userSizeKB, garmentSizeKB } }`
+- Add `ok: true` to success responses for consistency
 
 ## Technical Details
 
-### Edge function: new URL fetch helper
+### Content script extraction method tracking
 
-```text
-async function fetchAndUploadFromUrl(imageUrl, supabaseUrl, supabase):
-  1. Fetch imageUrl with standard headers (User-Agent, Accept)
-  2. Get response as ArrayBuffer
-  3. Detect content type from response headers
-  4. Generate UUID filename
-  5. Upload to vto-temp bucket
-  6. Return public URL
+Update `extractGarmentImage()` to return `{ url, source }` where source is one of: `"og_image"`, `"product_image"`, `"json_ld"`, `"largest_img"`, or `null`. Then combine with the capture method in the postMessage:
+
+```javascript
+// Before:
+extractionMethod: result.method  // could be "failed" or capture method only
+
+// After:
+extractionMethod: result.base64
+  ? (garmentSource + "/" + result.method)  // e.g. "og_image/dom_canvas"
+  : (garmentSource ? garmentSource + "/cors_blocked" : "none")
 ```
 
-### VTOScreen garment preview improvement
+### Edge function Replicate try/catch
 
-When base64 capture failed but URL exists:
-- Show the garment image using the URL directly in an `<img>` tag (browser img tags handle cross-origin fine, unlike canvas)
-- The preview will work normally; the "No garment image detected" message only shows when there's truly no image at all
+```typescript
+let replicateResponse;
+try {
+  replicateResponse = await fetch(REPLICATE_API_URL, { ... });
+} catch (err) {
+  return new Response(JSON.stringify({
+    ok: false,
+    error: "Replicate request failed",
+    debugInfo: { status: 0, message: (err as Error).message, extractionMethod }
+  }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+const data = await replicateResponse.json();
+if (!replicateResponse.ok) {
+  return new Response(JSON.stringify({
+    ok: false,
+    error: data?.detail ?? "Failed to start prediction",
+    debugInfo: { status: replicateResponse.status, extractionMethod }
+  }), { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+```
+
+### Self-test button (dev mode only)
+
+A small button rendered at the bottom of VTOScreen when `import.meta.env.DEV` is true. It sends two hardcoded 1x1 pixel PNG base64 strings to the edge function and toasts success/failure. This validates the Replicate token and request path without needing real images.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/components/panel/ExtensionPanel.tsx` | Store garment source URL from postMessage, pass to VTOScreen |
-| `src/components/panel/screens/VTOScreen.tsx` | Accept URL prop, use it as fallback for both preview and generation |
-| `src/hooks/useVirtualTryOn.ts` | Accept optional garment URL parameter, send in request body |
-| `supabase/functions/virtual-tryon/index.ts` | Accept `garment_image_url`, fetch server-side, upload to storage |
+| `extension/content.js` | Return extraction source from `extractGarmentImage()`, combine with capture method, never send null extractionMethod |
+| `src/components/panel/ExtensionPanel.tsx` | Default `garmentExtractionMethod` to `"unknown"`, coalesce in handler |
+| `src/components/panel/screens/VTOScreen.tsx` | Default prop, validate before calling backend, safe `??` everywhere, add self-test button |
+| `src/hooks/useVirtualTryOn.ts` | Coalesce all optional fields in request body |
+| `supabase/functions/virtual-tryon/index.ts` | Coalesce all body fields, wrap Replicate in try/catch with 502, return `ok` field and `debugInfo`, safe template literals |
 
-No changes needed to `extension/content.js` -- it already sends `sourceUrl` in the postMessage.
