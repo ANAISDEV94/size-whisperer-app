@@ -1,263 +1,95 @@
 
+# Fix Virtual Try-On (VTO) -- Three Root Causes
 
-# Virtual Try-On (VTO) MVP -- Architecture and Implementation Plan
+## Problems Identified
 
-## Overview
+From the screenshot and edge function logs, three issues are preventing VTO from working:
 
-Add a "Try It On" feature to the ALTAANA extension panel that lets users upload a photo of themselves, automatically extracts the garment image from the current product page, and generates a realistic virtual try-on image using Replicate's AI model. The feature lives below the size recommendation as a new panel state, fully modular and separate from the sizing engine.
+### Issue 1: Replicate cannot fetch retailer garment images
+The error `"cannot identify image file '/tmp/tmpj26m1uxrLOVF-WD4350'"` means Replicate's servers tried to download the garment image URL (e.g., from loversandfriends.us) but got blocked by CDN anti-hotlinking, redirects, or Cloudflare protection. Replicate received HTML/garbage instead of an image.
+
+**Fix:** The edge function must download the garment image server-side and convert it to a base64 data URI before passing it to Replicate. This way both images go to Replicate as base64, bypassing any CDN restrictions.
+
+### Issue 2: Garment image not rendering in the panel
+The `<img>` tag in VTOScreen shows broken alt text "Product garment". This is likely the same root cause -- the garment URL from the retailer CDN blocks cross-origin requests from the extension iframe.
+
+**Fix:** This is cosmetic and lower priority since the image will work once VTO generates. But we can add an `onError` fallback that shows "Image detected but preview unavailable" instead of a broken image icon.
+
+### Issue 3: Replicate model version may be invalid
+The logs show `"The specified version does not exist"`. While the version hash `0513734a...` appears on the Replicate docs, the API now supports using `model` field with `owner/name` format instead of `version` field, which is more resilient to version deprecation.
+
+**Fix:** Switch from `version`-based API to `model`-based API format: `"model": "cuuupid/idm-vton"` instead of `"version": "0513734a..."`.
 
 ---
 
-## 1. User Flow
+## Changes
+
+### 1. Edge function: `supabase/functions/virtual-tryon/index.ts`
+
+- **Proxy the garment image**: On POST, fetch the garment_image_url server-side, convert to base64, and send both images as data URIs to Replicate
+- **Switch to model-based API**: Use `"model": "cuuupid/idm-vton"` instead of `"version": "0513..."` for more stable model resolution
+- **Add User-Agent header** when fetching the garment image to avoid bot-detection blocks
+- **Add error handling** if the garment image fetch fails (return a clear error: "Could not load garment image")
+- **Add size limit** for the garment image (5MB max)
+
+### 2. Frontend: `src/components/panel/screens/VTOScreen.tsx`
+
+- Add `onError` handler to the garment `<img>` tag that shows a fallback message ("Image detected -- preview unavailable") instead of a broken icon
+- This handles cases where retailer CDNs block cross-origin image loading in the iframe
+
+### 3. Frontend: `src/hooks/useVirtualTryOn.ts`
+
+- No changes needed -- the polling logic is correct
+
+### 4. Extension: `extension/content.js`
+
+- No changes needed -- the garment extraction logic is working (it found the URL)
+
+---
+
+## Technical Details
+
+### Garment image proxy flow (edge function)
 
 ```text
-[Size Confirmed Screen]
-        |
-   "Try It On" button (replaces "Go to size selector")
-        |
-   [VTO Screen - Upload Phase]
-        |--- Upload photo (or use cached photo)
-        |--- Garment image auto-extracted (or manual URL fallback)
-        |
-   "Generate Try-On" CTA
-        |
-   [VTO Screen - Loading Phase]
-        |--- Spinner + "Fitting you in..."
-        |--- Polls backend every 3s for result
-        |
-   [VTO Screen - Result Phase]
-        |--- Shows generated image
-        |--- "Try Again" button (re-generates)
-        |--- "Download Image" button (optional)
-        |--- "Back to Sizing" link
+Client POST:
+  person_image_base64: "data:image/jpeg;base64,..."
+  garment_image_url: "https://cdn.loversandfriends.us/product.jpg"
+
+Edge function:
+  1. Fetch garment_image_url with User-Agent header
+  2. Read response as ArrayBuffer
+  3. Convert to base64 data URI
+  4. Send both as data URIs to Replicate:
+     human_img: "data:image/jpeg;base64,..."  (from client)
+     garm_img: "data:image/jpeg;base64,..."   (proxied)
+
+Replicate:
+  - Receives both images as base64 -- no external fetching needed
+  - No CDN blocking possible
 ```
 
----
+### Model API change
 
-## 2. New Panel State
-
-Add `'vto'` to the `PanelState` type in `src/types/panel.ts`. The Confirmed Screen's primary CTA changes from "Go to size selector" to "Try It On", which sets `panelState` to `'vto'`.
-
----
-
-## 3. Garment Image Extraction
-
-**Where:** Inside `extension/content.js` (runs on the host PDP page).
-
-**Strategy (ordered by reliability):**
-1. `og:image` meta tag
-2. `<meta property="product:image">` or `[itemprop="image"]`
-3. JSON-LD `@type: Product` -> `image` field
-4. Largest `<img>` inside the product gallery container (filter out icons under 200px)
-
-**Delivery:** The content script extracts the garment image URL on page load and passes it to the iframe via a new URL parameter `&garment_image=...`. The panel reads it from `useTargetBrand()`.
-
-**Fallback:** If no garment image is detected, the VTO screen shows a text input for the user to paste a garment image URL manually.
-
----
-
-## 4. Backend: Replicate Edge Function
-
-A new edge function `supabase/functions/virtual-tryon/index.ts` handles all Replicate communication. The Replicate API token is stored as a secret and never exposed to the frontend.
-
-### API Design
-
-**POST /virtual-tryon** -- Start a try-on prediction
-
-Request body:
+Before:
 ```json
-{
-  "person_image_base64": "<base64 string>",
-  "garment_image_url": "https://cdn.example.com/product.jpg"
-}
+{ "version": "0513734a452173b8173e907e3a59d19a36266e55b48528559432bd21c7d7e985", "input": { ... } }
 ```
 
-Response:
+After:
 ```json
-{
-  "prediction_id": "abc123",
-  "status": "starting"
-}
+{ "model": "cuuupid/idm-vton", "input": { ... } }
 ```
 
-**GET /virtual-tryon?prediction_id=abc123** -- Poll for result
-
-Response (in progress):
-```json
-{
-  "status": "processing",
-  "prediction_id": "abc123"
-}
-```
-
-Response (complete):
-```json
-{
-  "status": "succeeded",
-  "prediction_id": "abc123",
-  "output_image_url": "https://replicate.delivery/..."
-}
-```
-
-Response (failed):
-```json
-{
-  "status": "failed",
-  "error": "Model inference failed"
-}
-```
-
-### Replicate Model
-
-Use `cuuupid/idm-vton` (IDM-VTON) -- a state-of-the-art image-based virtual try-on model available on Replicate. It accepts:
-- `human_img`: person photo
-- `garm_img`: garment image
-- `category`: upper_body / lower_body / dresses
-
-The edge function maps the ALTAANA category (tops, dresses, bottoms, etc.) to the model's category enum.
-
-### Timeouts and Safety
-- Replicate prediction timeout: 120 seconds max polling
-- Individual poll interval: 3 seconds
-- Max 40 polls before returning timeout error
-- Edge function itself has a 25-second execution limit, so the function starts the prediction and returns the ID; polling happens from the frontend
+This uses Replicate's newer model-based prediction API which automatically resolves to the latest version.
 
 ---
 
-## 5. Secret Setup
+## Files Changed
 
-A new secret `REPLICATE_API_TOKEN` must be added to the project. You will be prompted to provide it before implementation begins.
+| File | Change |
+|------|--------|
+| `supabase/functions/virtual-tryon/index.ts` | Proxy garment image as base64, switch to model-based API |
+| `src/components/panel/screens/VTOScreen.tsx` | Add onError fallback for garment image preview |
 
----
-
-## 6. Frontend Components
-
-### New Files
-
-| File | Purpose |
-|------|---------|
-| `src/components/panel/screens/VTOScreen.tsx` | Main VTO screen with upload, generate, and result phases |
-| `src/hooks/useVirtualTryOn.ts` | Hook managing prediction lifecycle (start, poll, result) |
-
-### VTOScreen.tsx -- Three Internal Phases
-
-**Phase 1: Upload**
-- Shows cached person photo thumbnail if available (stored in localStorage as base64)
-- Upload button (file input, accept images only, max 5MB)
-- Displays auto-detected garment image thumbnail (from URL param)
-- Manual garment URL input as fallback
-- "Generate Try-On" CTA (disabled until both images ready)
-
-**Phase 2: Loading**
-- Centered spinner animation
-- "Fitting you in..." text
-- Cancel button
-
-**Phase 3: Result**
-- Generated try-on image displayed at full panel width
-- "Try Again" button (outline style, re-triggers generation)
-- "Download Image" button (optional, uses anchor download)
-- "Back to Sizing" link at bottom
-
-### Styling
-- All buttons follow the 48.5px height, 334px width pill system
-- Dark luxury aesthetic, no box shadows
-- Loading spinner uses the ALTAANA teal primary color
-- Person photo stored as base64 in `localStorage` under `altaana_vto_photo` so users do not re-upload on every visit
-
----
-
-## 7. ExtensionPanel.tsx Changes
-
-- Import `VTOScreen`
-- Add `'vto'` case to `renderScreen()` switch
-- Pass garment image URL (from `useTargetBrand`) and recommendation data to VTOScreen
-- No changes to any other screen or the panel shell structure
-
----
-
-## 8. ConfirmedScreen.tsx Changes
-
-- Replace "Go to size selector" button text with "Try It On"
-- Replace the `onAddToCart` callback with a new `onTryItOn` callback that sets panel state to `'vto'`
-- Keep the `ALTAANA_SCROLL_TO_SIZE` postMessage as a secondary text link below ("or go to size selector")
-
----
-
-## 9. Error Handling
-
-| Scenario | User-Facing Behavior |
-|----------|---------------------|
-| No garment image found | Show manual URL input field |
-| Invalid user image (too small, wrong format) | Toast: "Please upload a clear, front-facing photo" |
-| Replicate timeout (>120s) | "Generation took too long. Please try again." + Try Again button |
-| Replicate failure | "Something went wrong. Please try again." + Try Again button |
-| Rate limiting | "Too many requests. Please wait a moment." |
-| Network error | "Connection lost. Check your internet and try again." |
-
-No scenario causes a freeze or crash. All errors are caught and displayed inline on the VTO screen.
-
----
-
-## 10. File Structure Summary
-
-```text
-src/
-  types/panel.ts                          -- Add 'vto' to PanelState
-  components/panel/
-    ExtensionPanel.tsx                     -- Add VTO routing
-    screens/
-      ConfirmedScreen.tsx                  -- Change CTA to "Try It On"
-      VTOScreen.tsx                        -- NEW: VTO screen component
-  hooks/
-    useVirtualTryOn.ts                     -- NEW: Replicate polling hook
-
-extension/
-  content.js                              -- Add garment image extraction + URL param
-
-supabase/
-  functions/virtual-tryon/index.ts        -- NEW: Replicate proxy edge function
-  config.toml                             -- Add [functions.virtual-tryon] verify_jwt = false
-```
-
----
-
-## 11. Security Considerations
-
-- Replicate API token stored as a backend secret, never in frontend code or extension
-- Person photo sent as base64 directly to the edge function over HTTPS; never stored server-side
-- Garment image URL is a public CDN URL from the retailer -- no sensitive data
-- Edge function validates image size (max 5MB base64) and content type before forwarding
-- No user PII is sent to Replicate -- only anonymized image data
-- CORS headers follow existing edge function patterns
-
----
-
-## 12. Implementation Sequence
-
-1. **Secret setup** -- Add `REPLICATE_API_TOKEN` secret
-2. **Edge function** -- Create `virtual-tryon/index.ts` with start + poll endpoints
-3. **Types** -- Add `'vto'` to PanelState
-4. **Hook** -- Create `useVirtualTryOn.ts`
-5. **VTO Screen** -- Build `VTOScreen.tsx` with all three phases
-6. **Confirmed Screen** -- Swap CTA to "Try It On"
-7. **ExtensionPanel** -- Wire up VTO routing
-8. **Content script** -- Add garment image extraction
-9. **Testing** -- End-to-end test of the full flow
-
----
-
-## 13. Build Complexity Estimate
-
-| Component | Complexity | Estimated Effort |
-|-----------|-----------|-----------------|
-| Edge function (Replicate proxy) | Medium | Core backend work |
-| useVirtualTryOn hook | Medium | Polling state machine |
-| VTOScreen component | Medium | Three-phase UI |
-| Garment image extraction | Low-Medium | DOM heuristics |
-| ConfirmedScreen CTA change | Low | Text + callback swap |
-| ExtensionPanel routing | Low | One switch case |
-| Secret setup | Low | One-time config |
-
-Overall: **Medium complexity MVP** -- self-contained, modular, no impact on existing sizing logic.
-
+No UI layout changes. No changes to sizing logic.
